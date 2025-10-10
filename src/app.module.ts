@@ -1,4 +1,4 @@
-import { Module, MiddlewareConsumer } from '@nestjs/common';
+import { Module, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -76,8 +76,25 @@ import { AuthMiddleware } from './middleware/auth.middleware';
 })
 export class AppModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer
-      .apply(AuthMiddleware)
-      .forRoutes('*'); // Apply to all routes
+    // TESTING MODE: Disable authentication temporarily
+    // Set this to false when you want to test with proper authentication
+    const DISABLE_AUTH_FOR_TESTING = process.env.DISABLE_AUTH === 'true' || true; // Default to true for testing
+    
+    if (!DISABLE_AUTH_FOR_TESTING) {
+      // Production authentication flow
+      console.log('🔐 Authentication middleware ENABLED');
+      consumer
+        .apply(AuthMiddleware)
+        .exclude(
+          { path: 'api/auth/login', method: RequestMethod.POST },
+          { path: 'api/users/create-admin', method: RequestMethod.POST },
+          { path: 'api/companies', method: RequestMethod.ALL },
+          { path: 'api/device/register', method: RequestMethod.POST },
+          { path: 'api/heartbeat', method: RequestMethod.POST }
+        )
+        .forRoutes('*');
+    } else {
+      console.log('⚠️  Authentication middleware DISABLED for testing');
+    }
   }
 }

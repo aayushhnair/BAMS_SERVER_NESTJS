@@ -83,7 +83,7 @@ export class AttendanceUtils {
     userId: string,
     username: string,
     userDisplayName: string,
-    companyId: string,
+    companyId: string | undefined,
     sessions: SessionDocument[]
   ): DailyAttendanceRecord {
     const sessionSummaries = this.convertToSessionSummaries(sessions);

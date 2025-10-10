@@ -5,8 +5,8 @@ export type UserDocument = User & Document;
 
 @Schema()
 export class User {
-  @Prop({ required: true })
-  companyId: string;
+  @Prop({ required: false }) // Optional for admin users who exist before companies
+  companyId?: string;
 
   @Prop({ required: true })
   username: string;
@@ -29,5 +29,7 @@ export class User {
 
 export const UserSchema = SchemaFactory.createForClass(User);
 
-// Create compound unique index
-UserSchema.index({ companyId: 1, username: 1 }, { unique: true });
+// Create compound unique index for users with companies
+UserSchema.index({ companyId: 1, username: 1 }, { unique: true, sparse: true });
+// Create unique index for admin users without companies
+UserSchema.index({ username: 1 }, { unique: true, partialFilterExpression: { companyId: { $exists: false } } });

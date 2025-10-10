@@ -46,7 +46,7 @@ export interface DailyAttendanceRecord {
   userId: string;
   username: string;
   userDisplayName: string;
-  companyId: string;
+  companyId?: string;
   sessions: SessionSummary[];
   totalSessions: number;
   totalWorkingHours: number;
@@ -83,7 +83,7 @@ export interface MonthlyAttendanceRecord {
   userId: string;
   username: string;
   userDisplayName: string;
-  companyId: string;
+  companyId?: string;
   totalWorkingDays: number;
   presentDays: number;
   absentDays: number;
@@ -99,7 +99,7 @@ export interface YearlyAttendanceRecord {
   userId: string;
   username: string;
   userDisplayName: string;
-  companyId: string;
+  companyId?: string;
   totalWorkingDays: number;
   presentDays: number;
   absentDays: number;

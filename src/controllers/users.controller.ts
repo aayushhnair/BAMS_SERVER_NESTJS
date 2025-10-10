@@ -21,10 +21,20 @@ export class UsersController {
   @Post()
   async createUser(@Body() createUserDto: CreateUserDto) {
     try {
-      // First, validate that the company exists
-      const company = await this.companyModel.findById(createUserDto.companyId);
-      if (!company) {
-        throw new HttpException('Company not found', HttpStatus.BAD_REQUEST);
+      // Role-based validation
+      const userRole = createUserDto.role || 'employee';
+
+      // Employees MUST have a company
+      if (userRole === 'employee' && !createUserDto.companyId) {
+        throw new HttpException('Employee users must be associated with a company', HttpStatus.BAD_REQUEST);
+      }
+
+      // If companyId is provided, validate that the company exists
+      if (createUserDto.companyId) {
+        const company = await this.companyModel.findById(createUserDto.companyId);
+        if (!company) {
+          throw new HttpException('Company not found', HttpStatus.BAD_REQUEST);
+        }
       }
 
       // Validate password strength
@@ -34,17 +44,24 @@ export class UsersController {
       }
 
       // Check if user already exists
-      const existingUser = await this.userModel.findOne({
-        companyId: createUserDto.companyId,
-        username: createUserDto.username
-      });
-
-      if (existingUser) {
-        throw new HttpException('Username already exists in this company', HttpStatus.CONFLICT);
+      let existingUser;
+      if (createUserDto.companyId) {
+        // For users with company, check within company scope
+        existingUser = await this.userModel.findOne({
+          companyId: createUserDto.companyId,
+          username: createUserDto.username
+        });
+      } else {
+        // For standalone users (admins), check globally
+        existingUser = await this.userModel.findOne({
+          username: createUserDto.username,
+          companyId: { $exists: false }
+        });
       }
 
-      // Role-based validation
-      const userRole = createUserDto.role || 'employee';
+      if (existingUser) {
+        throw new HttpException('Username already exists', HttpStatus.CONFLICT);
+      }
 
       // If assignedDeviceId is provided, validate based on role
       if (createUserDto.assignedDeviceId) {
@@ -127,49 +144,31 @@ export class UsersController {
       // Force role to admin
       createUserDto.role = 'admin';
 
-      // First, validate that the company exists
-      const company = await this.companyModel.findById(createUserDto.companyId);
-      if (!company) {
-        throw new HttpException('Company not found', HttpStatus.BAD_REQUEST);
-      }
-
-      // Check if admin already exists for this company
-      const existingAdmin = await this.userModel.findOne({
-        companyId: createUserDto.companyId,
-        role: 'admin'
-      });
-
-      if (existingAdmin) {
-        throw new HttpException('Admin user already exists for this company. Use regular user creation endpoint.', HttpStatus.CONFLICT);
-      }
-
       // Validate password strength
       const passwordValidation = this.passwordService.validatePasswordStrength(createUserDto.password);
       if (!passwordValidation.isValid) {
         throw new HttpException(`Password requirements not met: ${passwordValidation.errors.join(', ')}`, HttpStatus.BAD_REQUEST);
       }
 
-      // Check if username already exists
+      // Check if admin already exists with this username (global check since admin doesn't need company)
       const existingUser = await this.userModel.findOne({
-        companyId: createUserDto.companyId,
         username: createUserDto.username
       });
 
       if (existingUser) {
-        throw new HttpException('Username already exists in this company', HttpStatus.CONFLICT);
+        throw new HttpException('Admin username already exists', HttpStatus.CONFLICT);
       }
 
       // Hash the password before saving
       const hashedPassword = await this.passwordService.hashPassword(createUserDto.password);
 
-      // Create admin user (no device/location validation required)
+      // Create standalone admin user (no company, device, or location required)
       const adminUser = new this.userModel({
-        companyId: createUserDto.companyId,
         username: createUserDto.username,
         password: hashedPassword,
         displayName: createUserDto.displayName,
         role: 'admin'
-        // Note: assignedDeviceId and allocatedLocationId are intentionally omitted for admin
+        // Note: companyId, assignedDeviceId and allocatedLocationId are intentionally omitted for standalone admin
       });
       await adminUser.save();
 
@@ -179,7 +178,7 @@ export class UsersController {
       return {
         ok: true,
         user: userResponse,
-        message: 'Admin user created successfully'
+        message: 'Standalone admin user created successfully'
       };
     } catch (error) {
       if (error instanceof HttpException) {

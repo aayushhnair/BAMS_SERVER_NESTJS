@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import type { Response } from 'express';
 import { Session, SessionDocument } from '../schemas/session.schema';
 import { User, UserDocument } from '../schemas/user.schema';
+import { Company, CompanyDocument } from '../schemas/company.schema';
 import { AttendanceQueryDto, DailyAttendanceRecord, MonthlyAttendanceRecord, YearlyAttendanceRecord, AttendanceAnalytics, AttendancePeriod, AttendanceFormat } from '../dto/attendance.dto';
 import { AttendanceUtils } from '../utils/attendance.utils';
 
@@ -12,7 +13,58 @@ export class AttendanceController {
   constructor(
     @InjectModel(Session.name) private sessionModel: Model<SessionDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectModel(Company.name) private companyModel: Model<CompanyDocument>,
   ) {}
+
+  // Helper method to format time in IST (Indian Standard Time)
+  private formatHumanTime(date: Date | string | null | undefined): string {
+    if (!date) return '';
+    const d = typeof date === 'string' ? new Date(date) : date;
+    return d.toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+  }
+
+  // Helper method to format date only in IST
+  private formatISTDate(date: Date | string | null | undefined): string {
+    if (!date) return '';
+    const d = typeof date === 'string' ? new Date(date) : date;
+    return d.toLocaleDateString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit'
+    });
+  }
+
+  // Helper method to format filename with IST date
+  private getISTFilenameDate(): string {
+    const now = new Date();
+    return now.toLocaleDateString('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+  }
+
+  // Helper method to get company name
+  private async getCompanyName(companyId: string | undefined): Promise<string> {
+    if (!companyId) return 'N/A';
+    try {
+      const company = await this.companyModel.findById(companyId);
+      return company?.name || 'Unknown Company';
+    } catch {
+      return 'Unknown Company';
+    }
+  }
 
   @Get('daily')
   async getDailyAttendance(@Query() query: AttendanceQueryDto, @Res() res?: Response) {
@@ -99,7 +151,7 @@ export class AttendanceController {
       });
 
       if (format === AttendanceFormat.CSV) {
-        return this.generateDailyCSV(dailyRecords, res!);
+        return await this.generateDailyCSV(dailyRecords, res!);
       }
 
       return res ? res.json({
@@ -250,7 +302,7 @@ export class AttendanceController {
       });
 
       if (format === AttendanceFormat.CSV) {
-        return this.generateMonthlyCSV(monthlyRecords, res!);
+        return await this.generateMonthlyCSV(monthlyRecords, res!);
       }
 
       return res ? res.json({
@@ -455,7 +507,7 @@ export class AttendanceController {
       });
 
       if (format === AttendanceFormat.CSV) {
-        return this.generateYearlyCSV(yearlyRecords, res!);
+        return await this.generateYearlyCSV(yearlyRecords, res!);
       }
 
       return res ? res.json({
@@ -625,42 +677,44 @@ export class AttendanceController {
     }
   }
 
-  private generateDailyCSV(records: DailyAttendanceRecord[], res: Response): void {
+  private async generateDailyCSV(records: DailyAttendanceRecord[], res: Response): Promise<void> {
     const headers = [
-      'Date',
+      'Date (IST)',
       'User ID',
       'Username', 
       'Display Name',
-      'Company ID',
+      'Company Name',
       'Total Sessions',
       'Total Working Hours',
       'Total Working Minutes',
-      'First Login Time',
-      'Last Logout Time',
+      'First Login Time (IST)',
+      'Last Logout Time (IST)',
       'Is Present',
       'Total Break Time (Hours)',
       'Effective Working Hours',
-      'Session Details'
+      'Session Details (IST)'
     ];
 
     const csvRows = [headers.join(',')];
 
     for (const record of records) {
+      const companyName = await this.getCompanyName(record.companyId);
+      
       const sessionDetails = record.sessions.map(s => 
-        `${s.deviceId}(${s.loginAt}-${s.logoutAt || 'active'}:${s.duration || 0}min)`
+        `${s.deviceId}(${this.formatHumanTime(s.loginAt)}-${s.logoutAt ? this.formatHumanTime(s.logoutAt) : 'active'}:${s.duration || 0}min)`
       ).join(';');
 
       const row = [
-        record.date,
+        this.formatISTDate(new Date(record.date + 'T00:00:00')),
         record.userId,
         record.username,
         `"${record.userDisplayName}"`,
-        record.companyId,
+        `"${companyName}"`,
         record.totalSessions,
         record.totalWorkingHours,
         record.totalWorkingMinutes,
-        record.firstLoginTime || '',
-        record.lastLogoutTime || '',
+        this.formatHumanTime(record.firstLoginTime),
+        this.formatHumanTime(record.lastLogoutTime),
         record.isPresent,
         record.totalBreakTime,
         record.effectiveWorkingHours,
@@ -670,7 +724,7 @@ export class AttendanceController {
     }
 
     const csvContent = csvRows.join('\n');
-    const filename = `daily_attendance_${new Date().toISOString().split('T')[0]}.csv`;
+    const filename = `daily_attendance_${this.getISTFilenameDate()}.csv`;
 
     res.set({
       'Content-Type': 'text/csv',
@@ -679,7 +733,7 @@ export class AttendanceController {
     res.send(csvContent);
   }
 
-  private generateMonthlyCSV(records: MonthlyAttendanceRecord[], res: Response): void {
+  private async generateMonthlyCSV(records: MonthlyAttendanceRecord[], res: Response): Promise<void> {
     const headers = [
       'Month',
       'Year',
@@ -687,7 +741,7 @@ export class AttendanceController {
       'User ID',
       'Username',
       'Display Name', 
-      'Company ID',
+      'Company Name',
       'Total Working Days',
       'Present Days',
       'Absent Days',
@@ -700,6 +754,8 @@ export class AttendanceController {
     const csvRows = [headers.join(',')];
 
     for (const record of records) {
+      const companyName = await this.getCompanyName(record.companyId);
+      
       const row = [
         record.month,
         record.year,
@@ -707,7 +763,7 @@ export class AttendanceController {
         record.userId,
         record.username,
         `"${record.userDisplayName}"`,
-        record.companyId,
+        `"${companyName}"`,
         record.totalWorkingDays,
         record.presentDays,
         record.absentDays,
@@ -720,7 +776,7 @@ export class AttendanceController {
     }
 
     const csvContent = csvRows.join('\n');
-    const filename = `monthly_attendance_${new Date().toISOString().split('T')[0]}.csv`;
+    const filename = `monthly_attendance_${this.getISTFilenameDate()}.csv`;
 
     res.set({
       'Content-Type': 'text/csv',
@@ -729,13 +785,13 @@ export class AttendanceController {
     res.send(csvContent);
   }
 
-  private generateYearlyCSV(records: YearlyAttendanceRecord[], res: Response): void {
+  private async generateYearlyCSV(records: YearlyAttendanceRecord[], res: Response): Promise<void> {
     const headers = [
       'Year',
       'User ID',
       'Username',
       'Display Name',
-      'Company ID',
+      'Company Name',
       'Total Working Days',
       'Present Days',
       'Absent Days',
@@ -749,12 +805,14 @@ export class AttendanceController {
     const csvRows = [headers.join(',')];
 
     for (const record of records) {
+      const companyName = await this.getCompanyName(record.companyId);
+      
       const row = [
         record.year,
         record.userId,
         record.username,
         `"${record.userDisplayName}"`,
-        record.companyId,
+        `"${companyName}"`,
         record.totalWorkingDays,
         record.presentDays,
         record.absentDays,
@@ -768,7 +826,7 @@ export class AttendanceController {
     }
 
     const csvContent = csvRows.join('\n');
-    const filename = `yearly_attendance_${new Date().toISOString().split('T')[0]}.csv`;
+    const filename = `yearly_attendance_${this.getISTFilenameDate()}.csv`;
 
     res.set({
       'Content-Type': 'text/csv',
