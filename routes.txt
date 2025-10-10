@@ -1,0 +1,865 @@
+# API Routes Documentation
+
+Base URL: http://localhost:3000
+
+## Device Registration
+
+### POST /api/device/register
+**Description:** Register a new device for a company
+
+**Request Body:**
+```json
+{
+  "deviceId": "D-001",
+  "serial": "SN123456",
+  "name": "PC-MAIN",
+  "companyId": "C1"
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "deviceId": "D-001",
+  "message": "Device registered successfully"
+}
+```
+
+**Error Response (409):**
+```json
+{
+  "statusCode": 409,
+  "message": "Device already registered"
+}
+```
+
+---
+
+## Authentication
+
+### POST /api/auth/login
+**Description:** User login with device and location verification. Automatically logs out any existing active sessions for the user. Users with allocated locations must be within 100 meters of their allocated location to login.
+
+**Request Body:**
+```json
+{
+  "username": "john.doe",
+  "password": "password123",
+  "deviceId": "D-001",
+  "location": {
+    "lat": 9.12345,
+    "lon": 77.12345,
+    "accuracy": 20,
+    "ts": "2025-10-09T06:00:00Z"
+  }
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "sessionId": "mongodb-objectid",
+  "expiresIn": 43200
+}
+```
+
+**Behavior:**
+- If user has existing active sessions, they are automatically set to `auto_logged_out` status
+- Only one active session per user is allowed at any time
+- The new session becomes the only active session
+- **Location Verification:** 
+  - If user has an `allocatedLocationId`, they must be within 100 meters of that specific location
+  - If user has no allocated location, they can login from any company location
+  - Proximity distance can be configured via `LOCATION_PROXIMITY_METERS` environment variable
+
+**Error Responses:**
+```json
+// Invalid credentials
+{
+  "ok": false,
+  "error": "Invalid credentials"
+}
+
+// Device not assigned
+{
+  "ok": false,
+  "error": "NOT_ASSIGNED"
+}
+
+// Not within allocated location (when user has allocated location)
+{
+  "ok": false,
+  "error": "NOT_WITHIN_ALLOCATED_LOCATION"
+}
+
+// Allocated location not found
+{
+  "ok": false,
+  "error": "ALLOCATED_LOCATION_NOT_FOUND"
+}
+
+// Not within any company location (when user has no allocated location)
+{
+  "ok": false,
+  "error": "LOCATION_NOT_ALLOWED"
+}
+```
+
+### POST /api/auth/logout
+**Description:** User logout
+
+**Request Body:**
+```json
+{
+  "sessionId": "mongodb-objectid",
+  "deviceId": "D-001",
+  "location": {
+    "lat": 9.12345,
+    "lon": 77.12345,
+    "accuracy": 20,
+    "ts": "2025-10-09T06:00:00Z"
+  }
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "message": "Logged out successfully"
+}
+```
+
+---
+
+## Heartbeat
+
+### POST /api/heartbeat
+**Description:** Update session activity to prevent auto-logout
+
+**Request Body:**
+```json
+{
+  "sessionId": "mongodb-objectid",
+  "deviceId": "D-001",
+  "location": {
+    "lat": 9.12345,
+    "lon": 77.12345,
+    "accuracy": 20,
+    "ts": "2025-10-09T06:00:00Z"
+  }
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "message": "Heartbeat updated"
+}
+```
+
+**Error Response (401):**
+```json
+{
+  "statusCode": 401,
+  "message": "Session not found"
+}
+```
+
+---
+
+## Admin APIs
+
+### POST /api/admin/assign-device
+**Description:** Assign a device to a user (admin only)
+
+**Request Body:**
+```json
+{
+  "deviceId": "D-001",
+  "userId": "U2"
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "message": "Device assigned successfully",
+  "deviceId": "D-001",
+  "userId": "U2"
+}
+```
+
+---
+
+## Location Management
+
+### POST /api/locations
+**Description:** Add an allowed location for a company
+
+**Request Body:**
+```json
+{
+  "companyId": "C1",
+  "name": "Main Office",
+  "lon": 77.12345,
+  "lat": 9.12345,
+  "radiusMeters": 150
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "locationId": "location-id",
+  "message": "Location created successfully"
+}
+```
+
+### GET /api/locations?companyId=C1
+**Description:** Get all allowed locations for a company
+
+**Query Parameters:**
+- `companyId` (optional): Filter by company ID
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "locations": [
+    {
+      "id": "L1",
+      "companyId": "C1",
+      "name": "Main Office",
+      "lat": 9.12345,
+      "lon": 77.12345,
+      "radiusMeters": 150
+    }
+  ]
+}
+```
+
+---
+
+## Session Management
+
+### GET /api/sessions
+**Description:** Get session logs with filtering options
+
+**Query Parameters:**
+- `companyId` (optional): Filter by company
+- `userId` (optional): Filter by user
+- `from` (optional): Start date (ISO string)
+- `to` (optional): End date (ISO string)
+
+**Example:** `/api/sessions?companyId=C1&from=2025-10-01&to=2025-10-31`
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "sessions": [
+    {
+      "sessionId": "session-id",
+      "companyId": "C1",
+      "userId": "U2",
+      "userDisplayName": "John Doe",
+      "deviceId": "D-001",
+      "loginAt": "2025-10-09T06:00:00Z",
+      "logoutAt": "2025-10-09T18:00:00Z",
+      "status": "logged_out",
+      "lastHeartbeat": "2025-10-09T18:00:00Z",
+      "loginLocation": {
+        "lat": 9.12345,
+        "lon": 77.12345,
+        "accuracy": 20
+      }
+    }
+  ]
+}
+```
+
+### GET /api/export
+**Description:** Export session data in various formats
+
+**Query Parameters:**
+- `companyId` (optional): Filter by company
+- `from` (optional): Start date (ISO string)
+- `to` (optional): End date (ISO string)
+- `format` (optional): Export format ('csv' or 'json', default: 'csv')
+
+**Example:** `/api/export?companyId=C1&format=csv&from=2025-10-01&to=2025-10-31`
+
+**Success Response (CSV format):**
+- Content-Type: text/csv
+- Content-Disposition: attachment; filename="sessions_export_YYYY-MM-DD.csv"
+- Body: CSV data with headers
+
+**Success Response (JSON format):**
+```json
+{
+  "ok": true,
+  "sessions": [
+    {
+      "sessionId": "session-id",
+      "companyId": "C1",
+      "userId": "U2",
+      "userDisplayName": "John Doe",
+      "deviceId": "D-001",
+      "loginAt": "2025-10-09T06:00:00Z",
+      "logoutAt": "2025-10-09T18:00:00Z",
+      "status": "logged_out",
+      "lastHeartbeat": "2025-10-09T18:00:00Z",
+      "loginLocation": {
+        "lat": 9.12345,
+        "lon": 77.12345,
+        "accuracy": 20
+      }
+    }
+  ]
+}
+```
+
+---
+
+## User Management
+
+### POST /api/users
+**Description:** Create a new user/employee account (only with existing devices and optional location allocation)
+
+**Request Body:**
+```json
+{
+  "companyId": "C1",
+  "username": "jane.doe",
+  "password": "password123",
+  "displayName": "Jane Doe",
+  "assignedDeviceId": "D-002",
+  "allocatedLocationId": "L1",
+  "role": "employee"
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "user": {
+    "_id": "U3",
+    "companyId": "C1",
+    "username": "jane.doe",
+    "displayName": "Jane Doe",
+    "assignedDeviceId": "D-002",
+    "allocatedLocationId": "L1",
+    "role": "employee"
+  },
+  "message": "User created successfully"
+}
+```
+
+**Error Responses:**
+```json
+// Username already exists
+{
+  "statusCode": 409,
+  "message": "Username already exists in this company"
+}
+
+// Device not found or doesn't belong to company
+{
+  "statusCode": 400,
+  "message": "Device not found or does not belong to this company"
+}
+
+// Device already assigned to another user
+{
+  "statusCode": 409,
+  "message": "Device D-002 is already assigned to user john.doe"
+}
+
+// Location not found or doesn't belong to company
+{
+  "statusCode": 400,
+  "message": "Location not found or does not belong to this company"
+}
+```
+
+### GET /api/users
+**Description:** Get list of users with optional filtering
+
+**Query Parameters:**
+- `companyId` (optional): Filter by company
+- `role` (optional): Filter by role ('employee' or 'admin')
+
+**Example:** `/api/users?companyId=C1&role=employee`
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "users": [
+    {
+      "_id": "U2",
+      "companyId": "C1",
+      "username": "john.doe",
+      "displayName": "John Doe",
+      "assignedDeviceId": "D-001",
+      "allocatedLocationId": "L1",
+      "role": "employee"
+    }
+  ]
+}
+```
+
+### GET /api/users/:id
+**Description:** Get a specific user by ID
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "user": {
+    "_id": "U2",
+    "companyId": "C1",
+    "username": "john.doe",
+    "displayName": "John Doe",
+    "assignedDeviceId": "D-001",
+    "allocatedLocationId": "L1",
+    "role": "employee"
+  }
+}
+```
+
+### PUT /api/users/:id
+**Description:** Update user information including device and location assignments
+
+**Request Body:**
+```json
+{
+  "displayName": "John Smith",
+  "assignedDeviceId": "D-003",
+  "allocatedLocationId": "L2",
+  "role": "admin"
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "user": {
+    "_id": "U2",
+    "companyId": "C1",
+    "username": "john.doe",
+    "displayName": "John Smith",
+    "assignedDeviceId": "D-003",
+    "allocatedLocationId": "L2",
+    "role": "admin"
+  },
+  "message": "User updated successfully"
+}
+```
+
+### DELETE /api/users/:id
+**Description:** Delete a user account (automatically unassigns device)
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "message": "User deleted successfully"
+}
+```
+
+### GET /api/users/available-devices/:companyId
+**Description:** Get list of devices available for assignment (not assigned to any user)
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "devices": [
+    {
+      "_id": "D-003",
+      "deviceId": "D-003",
+      "serial": "SN789",
+      "name": "PC-OFFICE-2",
+      "companyId": "C1",
+      "lastSeen": "2025-10-09T12:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+## Attendance Tracking
+
+### GET /api/attendance/daily
+**Description:** Get daily attendance records with detailed session analytics
+
+**Query Parameters:**
+- `companyId` (optional): Filter by company ID
+- `userId` (optional): Filter by user ID
+- `username` (optional): Filter by username
+- `from` (optional): Start date (ISO string, defaults to today)
+- `to` (optional): End date (ISO string, defaults to today)
+- `format` (optional): Response format ('json' or 'csv', default: 'json')
+
+**Example:** `/api/attendance/daily?companyId=BAMS01&from=2025-10-01&to=2025-10-31&format=csv`
+
+**Success Response (JSON format):**
+```json
+{
+  "ok": true,
+  "period": "daily",
+  "dateRange": {
+    "from": "2025-10-01T00:00:00.000Z",
+    "to": "2025-10-31T23:59:59.999Z"
+  },
+  "totalRecords": 25,
+  "records": [
+    {
+      "date": "2025-10-09",
+      "userId": "68e789d5ec5be81252f648bc",
+      "username": "aayushhnair",
+      "userDisplayName": "Ayush V Nair",
+      "companyId": "BAMS01",
+      "sessions": [
+        {
+          "sessionId": "68e7a7add8927cc737574d23",
+          "deviceId": "D-002",
+          "loginAt": "2025-10-09T08:00:00.000Z",
+          "logoutAt": "2025-10-09T17:30:00.000Z",
+          "duration": 570,
+          "status": "logged_out"
+        }
+      ],
+      "totalSessions": 1,
+      "totalWorkingHours": 9.5,
+      "totalWorkingMinutes": 570,
+      "firstLoginTime": "2025-10-09T08:00:00.000Z",
+      "lastLogoutTime": "2025-10-09T17:30:00.000Z",
+      "isPresent": true,
+      "breaks": [],
+      "totalBreakTime": 0,
+      "effectiveWorkingHours": 9.5
+    }
+  ]
+}
+```
+
+**Success Response (CSV format):**
+- Content-Type: text/csv
+- Content-Disposition: attachment; filename="daily_attendance_YYYY-MM-DD.csv"
+- Body: CSV data with headers including Date, Username, Display Name, Total Working Hours, Sessions, etc.
+
+### GET /api/attendance/monthly
+**Description:** Get monthly attendance records with daily breakdowns and statistics
+
+**Query Parameters:**
+- `companyId` (optional): Filter by company ID
+- `userId` (optional): Filter by user ID
+- `username` (optional): Filter by username
+- `from` (optional): Start date (ISO string, defaults to current month)
+- `to` (optional): End date (ISO string, defaults to current month)
+- `format` (optional): Response format ('json' or 'csv', default: 'json')
+
+**Example:** `/api/attendance/monthly?companyId=BAMS01&userId=68e789d5ec5be81252f648bc&format=csv`
+
+**Success Response (JSON format):**
+```json
+{
+  "ok": true,
+  "period": "monthly",
+  "dateRange": {
+    "from": "2025-10-01T00:00:00.000Z",
+    "to": "2025-10-31T23:59:59.999Z"
+  },
+  "totalRecords": 1,
+  "records": [
+    {
+      "month": "2025-10",
+      "year": 2025,
+      "monthName": "October",
+      "userId": "68e789d5ec5be81252f648bc",
+      "username": "aayushhnair",
+      "userDisplayName": "Ayush V Nair",
+      "companyId": "BAMS01",
+      "totalWorkingDays": 23,
+      "presentDays": 20,
+      "absentDays": 3,
+      "attendancePercentage": 86.96,
+      "totalWorkingHours": 185.5,
+      "averageWorkingHoursPerDay": 9.28,
+      "totalSessions": 22,
+      "dailyRecords": [
+        {
+          "date": "2025-10-01",
+          "userId": "68e789d5ec5be81252f648bc",
+          "username": "aayushhnair",
+          "userDisplayName": "Ayush V Nair",
+          "companyId": "BAMS01",
+          "sessions": [...],
+          "totalSessions": 1,
+          "totalWorkingHours": 8.75,
+          "isPresent": true,
+          "breaks": [],
+          "effectiveWorkingHours": 8.75
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Success Response (CSV format):**
+- Content-Type: text/csv
+- Content-Disposition: attachment; filename="monthly_attendance_YYYY-MM-DD.csv"
+- Body: CSV data with headers including Month, Username, Total Working Days, Present Days, Attendance Percentage, etc.
+
+### GET /api/attendance/yearly
+**Description:** Get yearly attendance records with monthly breakdowns and comprehensive statistics
+
+**Query Parameters:**
+- `companyId` (optional): Filter by company ID
+- `userId` (optional): Filter by user ID
+- `username` (optional): Filter by username
+- `from` (optional): Start date (ISO string, defaults to current year)
+- `to` (optional): End date (ISO string, defaults to current year)
+- `format` (optional): Response format ('json' or 'csv', default: 'json')
+
+**Example:** `/api/attendance/yearly?companyId=BAMS01&username=aayushhnair&format=csv`
+
+**Success Response (JSON format):**
+```json
+{
+  "ok": true,
+  "period": "yearly",
+  "dateRange": {
+    "from": "2025-01-01T00:00:00.000Z",
+    "to": "2025-12-31T23:59:59.999Z"
+  },
+  "totalRecords": 1,
+  "records": [
+    {
+      "year": 2025,
+      "userId": "68e789d5ec5be81252f648bc",
+      "username": "aayushhnair",
+      "userDisplayName": "Ayush V Nair",
+      "companyId": "BAMS01",
+      "totalWorkingDays": 261,
+      "presentDays": 235,
+      "absentDays": 26,
+      "attendancePercentage": 90.04,
+      "totalWorkingHours": 2156.25,
+      "averageWorkingHoursPerDay": 9.18,
+      "averageWorkingHoursPerMonth": 179.69,
+      "totalSessions": 247,
+      "monthlyRecords": [
+        {
+          "month": "2025-01",
+          "year": 2025,
+          "monthName": "January",
+          "userId": "68e789d5ec5be81252f648bc",
+          "username": "aayushhnair",
+          "userDisplayName": "Ayush V Nair",
+          "companyId": "BAMS01",
+          "totalWorkingDays": 23,
+          "presentDays": 21,
+          "absentDays": 2,
+          "attendancePercentage": 91.30,
+          "totalWorkingHours": 195.75,
+          "averageWorkingHoursPerDay": 9.32,
+          "totalSessions": 23,
+          "dailyRecords": [...]
+        }
+      ],
+      "monthlyBreakdown": [
+        {
+          "month": "2025-01",
+          "presentDays": 21,
+          "workingHours": 195.75,
+          "attendancePercentage": 91.30
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Success Response (CSV format):**
+- Content-Type: text/csv
+- Content-Disposition: attachment; filename="yearly_attendance_YYYY-MM-DD.csv"
+- Body: CSV data with headers including Year, Username, Total Working Days, Present Days, Total Working Hours, etc.
+
+### GET /api/attendance/analytics
+**Description:** Get comprehensive attendance analytics including trends and top performers
+
+**Query Parameters:**
+- `companyId` (optional): Filter by company ID
+- `from` (optional): Start date (ISO string, defaults to current month)
+- `to` (optional): End date (ISO string, defaults to current month)
+
+**Example:** `/api/attendance/analytics?companyId=BAMS01&from=2025-10-01&to=2025-10-31`
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "dateRange": {
+    "from": "2025-10-01T00:00:00.000Z",
+    "to": "2025-10-31T23:59:59.999Z"
+  },
+  "analytics": {
+    "totalEmployees": 15,
+    "presentToday": 12,
+    "absentToday": 3,
+    "averageWorkingHours": 8.75,
+    "topPerformers": [
+      {
+        "userId": "68e789d5ec5be81252f648bc",
+        "username": "aayushhnair",
+        "userDisplayName": "Ayush V Nair",
+        "workingHours": 185.5,
+        "attendancePercentage": 86.96
+      }
+    ],
+    "attendanceTrends": [
+      {
+        "date": "2025-10-01",
+        "presentCount": 14,
+        "totalEmployees": 15,
+        "attendancePercentage": 93.33
+      },
+      {
+        "date": "2025-10-02",
+        "presentCount": 13,
+        "totalEmployees": 15,
+        "attendancePercentage": 86.67
+      }
+    ]
+  }
+}
+```
+
+**Key Attendance Metrics Explained:**
+- **totalWorkingHours**: Sum of all session durations for the period
+- **effectiveWorkingHours**: Working hours minus break time
+- **attendancePercentage**: (Present days / Total working days) × 100
+- **breaks**: Time gaps between sessions (longer than 5 minutes)
+- **isPresent**: True if user had at least one session on that date
+- **Working Days**: Excludes weekends (Saturday and Sunday)
+
+---
+
+## Company Management
+
+### POST /api/companies
+**Description:** Create a new company
+
+**Request Body:**
+```json
+{
+  "name": "Tech Corp",
+  "timezone": "Asia/Kolkata",
+  "settings": {
+    "sessionTimeoutHours": 10,
+    "heartbeatMinutes": 3
+  }
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "company": {
+    "_id": "C2",
+    "name": "Tech Corp",
+    "timezone": "Asia/Kolkata",
+    "settings": {
+      "sessionTimeoutHours": 10,
+      "heartbeatMinutes": 3
+    }
+  },
+  "message": "Company created successfully"
+}
+```
+
+### GET /api/companies
+**Description:** Get list of all companies
+
+**Success Response (200):**
+```json
+{
+  "ok": true,
+  "companies": [
+    {
+      "_id": "C1",
+      "name": "Transvigour",
+      "timezone": "Asia/Kolkata",
+      "settings": {
+        "sessionTimeoutHours": 12,
+        "heartbeatMinutes": 5
+      }
+    }
+  ]
+}
+```
+
+### GET /api/companies/:id
+**Description:** Get a specific company by ID
+
+### PUT /api/companies/:id
+**Description:** Update company information
+
+**Request Body:**
+```json
+{
+  "name": "Updated Company Name",
+  "settings": {
+    "sessionTimeoutHours": 8
+  }
+}
+```
+
+---
+
+## Error Codes
+
+**Common HTTP Status Codes:**
+- 200: Success
+- 400: Bad Request (validation error)
+- 401: Unauthorized (invalid session)
+- 403: Forbidden (device mismatch)
+- 404: Not Found (resource not found)
+- 409: Conflict (duplicate resource)
+- 500: Internal Server Error
+
+**Location-based Authentication Errors:**
+- `NOT_ASSIGNED`: Device not assigned to user or user not admin
+- `NO_LOCATIONS_CONFIGURED`: No allowed locations set for company
+- `LOCATION_NOT_ALLOWED`: User not within allowed location radius
+
+**Session Status Values:**
+- `active`: Session is currently active
+- `logged_out`: User manually logged out
+- `auto_logged_out`: Session automatically logged out due to timeout
+
+---
+
+## Sample Data for Testing
+
+The system comes with pre-configured sample data:
+
+**Company:** Transvigour (ID: C1)
+**Admin User:** admin / admin123
+**Employee User:** john.doe / password123 (assigned to device D-001)
+**Device:** D-001 (PC-MAIN)
+**Location:** Main Office at [77.12345, 9.12345] with 150m radius
