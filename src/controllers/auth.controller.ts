@@ -47,75 +47,87 @@ export class AuthController {
         throw new HttpException('Invalid credentials', HttpStatus.UNAUTHORIZED);
       }
 
-      console.log('User company:', user.companyId, 'Device requested:', loginDto.deviceId);
+      console.log('User company:', user.companyId, 'Device requested:', loginDto.deviceId, 'User role:', user.role);
 
-      // Check device assignment
-      if (user.assignedDeviceId && user.assignedDeviceId !== loginDto.deviceId) {
-        console.log('Device not assigned - user device:', user.assignedDeviceId, 'requested device:', loginDto.deviceId);
-        return { ok: false, error: 'NOT_ASSIGNED' };
-      }
-
-      // If device is unassigned, check if user is admin
-      if (!user.assignedDeviceId && user.role !== 'admin') {
-        console.log('Device unassigned and user not admin');
-        return { ok: false, error: 'NOT_ASSIGNED' };
-      }
-
-      // Location-based authentication check
-      const userLocation = { lat: loginDto.location.lat, lon: loginDto.location.lon };
-      console.log('User location:', userLocation);
-      
-      // Check if user has an allocated location
-      if (user.allocatedLocationId) {
-        console.log('User has allocated location:', user.allocatedLocationId);
-        
-        // Find the user's specific allocated location
-        const allocatedLocation = await this.locationModel.findById(user.allocatedLocationId);
-        
-        if (!allocatedLocation) {
-          console.log('Allocated location not found:', user.allocatedLocationId);
-          return { ok: false, error: 'ALLOCATED_LOCATION_NOT_FOUND' };
-        }
-        
-        // Get proximity setting from config (default 100m)
-        const proximityMeters = this.configService.get<number>('locationProximityMeters') || 100;
-        console.log('Checking proximity within:', proximityMeters, 'meters');
-        console.log('Allocated location:', { 
-          name: allocatedLocation.name, 
-          coords: allocatedLocation.coords.coordinates 
-        });
-        
-        // Check if user is within 100m of their allocated location
-        if (!isWithinAllocatedLocation(userLocation, allocatedLocation, proximityMeters)) {
-          console.log('User not within allocated location proximity');
-          return { ok: false, error: 'NOT_WITHIN_ALLOCATED_LOCATION' };
-        }
-        
-        console.log('User within allocated location proximity - access granted');
+      // Role-based device assignment validation
+      if (user.role === 'admin') {
+        console.log('Admin user - skipping device assignment validation');
+        // Admins can login from any device
       } else {
-        console.log('User has no allocated location - checking general company locations');
-        
-        // Fallback to general company location check if no allocated location
-        const allowedLocations = await this.locationModel.find({ companyId: user.companyId });
-        console.log('Found general locations for company:', allowedLocations.length);
-        
-        if (allowedLocations.length === 0) {
-          console.log('No locations configured for company:', user.companyId);
-          return { ok: false, error: 'NO_LOCATIONS_CONFIGURED' };
+        // Employee users must have assigned device
+        if (user.assignedDeviceId && user.assignedDeviceId !== loginDto.deviceId) {
+          console.log('Device not assigned - user device:', user.assignedDeviceId, 'requested device:', loginDto.deviceId);
+          return { ok: false, error: 'NOT_ASSIGNED' };
         }
 
-        console.log('Allowed general locations:', allowedLocations.map(loc => ({ 
-          name: loc.name, 
-          coords: loc.coords.coordinates, 
-          radius: loc.radiusMeters 
-        })));
-        
-        if (!isWithinAllowedLocation(userLocation, allowedLocations)) {
-          console.log('User not within any allowed general location');
-          return { ok: false, error: 'LOCATION_NOT_ALLOWED' };
+        // If device is unassigned, employee cannot login
+        if (!user.assignedDeviceId) {
+          console.log('Device unassigned and user is employee');
+          return { ok: false, error: 'NOT_ASSIGNED' };
         }
+      }
+
+      // Role-based location validation
+      if (user.role === 'admin') {
+        console.log('Admin user - skipping location validation');
+        // Admins can login from anywhere
+      } else {
+        // Employee users must validate location
+        const userLocation = { lat: loginDto.location.lat, lon: loginDto.location.lon };
+        console.log('Employee user location:', userLocation);
         
-        console.log('User within general company location - access granted');
+        // Check if user has an allocated location
+        if (user.allocatedLocationId) {
+          console.log('Employee has allocated location:', user.allocatedLocationId);
+          
+          // Find the user's specific allocated location
+          const allocatedLocation = await this.locationModel.findById(user.allocatedLocationId);
+          
+          if (!allocatedLocation) {
+            console.log('Allocated location not found:', user.allocatedLocationId);
+            return { ok: false, error: 'ALLOCATED_LOCATION_NOT_FOUND' };
+          }
+          
+          // Get proximity setting from config (default 100m)
+          const proximityMeters = this.configService.get<number>('locationProximityMeters') || 100;
+          console.log('Checking proximity within:', proximityMeters, 'meters');
+          console.log('Allocated location:', { 
+            name: allocatedLocation.name, 
+            coords: allocatedLocation.coords.coordinates 
+          });
+          
+          // Check if user is within 100m of their allocated location
+          if (!isWithinAllocatedLocation(userLocation, allocatedLocation, proximityMeters)) {
+            console.log('Employee not within allocated location proximity');
+            return { ok: false, error: 'NOT_WITHIN_ALLOCATED_LOCATION' };
+          }
+          
+          console.log('Employee within allocated location proximity - access granted');
+        } else {
+          console.log('Employee has no allocated location - checking general company locations');
+          
+          // Fallback to general company location check if no allocated location
+          const allowedLocations = await this.locationModel.find({ companyId: user.companyId });
+          console.log('Found general locations for company:', allowedLocations.length);
+          
+          if (allowedLocations.length === 0) {
+            console.log('No locations configured for company:', user.companyId);
+            return { ok: false, error: 'NO_LOCATIONS_CONFIGURED' };
+          }
+
+          console.log('Allowed general locations:', allowedLocations.map(loc => ({ 
+            name: loc.name, 
+            coords: loc.coords.coordinates, 
+            radius: loc.radiusMeters 
+          })));
+          
+          if (!isWithinAllowedLocation(userLocation, allowedLocations)) {
+            console.log('Employee not within any allowed general location');
+            return { ok: false, error: 'LOCATION_NOT_ALLOWED' };
+          }
+          
+          console.log('Employee within general company location - access granted');
+        }
       }
 
       console.log('Location check passed, creating session');

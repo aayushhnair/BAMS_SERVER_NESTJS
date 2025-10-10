@@ -24,14 +24,16 @@ export class AuthMiddleware implements NestMiddleware {
     try {
       // Skip auth for certain routes
       const skipAuthRoutes = [
-        '/api/auth/login',
-        '/api/companies', // Allow company creation without auth
-        '/api/device/register',
-        '/api/heartbeat'
+        { path: '/api/auth/login', methods: ['POST'] },
+        { path: '/api/companies', methods: ['POST', 'GET'] }, // Allow company operations without auth
+        { path: '/api/device/register', methods: ['POST'] },
+        { path: '/api/heartbeat', methods: ['POST'] },
+        { path: '/api/users/create-admin', methods: ['POST'] } // Allow first admin creation without auth
       ];
 
       const isSkipRoute = skipAuthRoutes.some(route => 
-        req.path.startsWith(route) && (req.method === 'POST' || req.method === 'GET')
+        (req.path === route.path || req.path.startsWith(route.path + '/')) && 
+        route.methods.includes(req.method)
       );
 
       if (isSkipRoute) {

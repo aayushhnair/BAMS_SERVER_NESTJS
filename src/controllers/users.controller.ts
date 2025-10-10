@@ -43,7 +43,10 @@ export class UsersController {
         throw new HttpException('Username already exists in this company', HttpStatus.CONFLICT);
       }
 
-      // If assignedDeviceId is provided, validate that the device exists and belongs to the same company
+      // Role-based validation
+      const userRole = createUserDto.role || 'employee';
+
+      // If assignedDeviceId is provided, validate based on role
       if (createUserDto.assignedDeviceId) {
         const device = await this.deviceModel.findOne({ 
           deviceId: createUserDto.assignedDeviceId,
@@ -63,9 +66,12 @@ export class UsersController {
         if (deviceAssignedUser) {
           throw new HttpException(`Device ${createUserDto.assignedDeviceId} is already assigned to user ${deviceAssignedUser.username}`, HttpStatus.CONFLICT);
         }
+      } else if (userRole === 'employee') {
+        // Employees should have a device assigned (warning, not error for flexibility)
+        console.warn(`Warning: Employee ${createUserDto.username} created without assigned device`);
       }
 
-      // If allocatedLocationId is provided, validate that the location exists and belongs to the same company
+      // If allocatedLocationId is provided, validate based on role
       if (createUserDto.allocatedLocationId) {
         const location = await this.locationModel.findOne({ 
           _id: createUserDto.allocatedLocationId,
@@ -75,6 +81,9 @@ export class UsersController {
         if (!location) {
           throw new HttpException('Location not found or does not belong to this company', HttpStatus.BAD_REQUEST);
         }
+      } else if (userRole === 'employee') {
+        // Employees should have a location allocated (warning, not error for flexibility)
+        console.warn(`Warning: Employee ${createUserDto.username} created without allocated location`);
       }
 
       // Hash the password before saving
@@ -83,7 +92,8 @@ export class UsersController {
       // Create new user with hashed password
       const user = new this.userModel({
         ...createUserDto,
-        password: hashedPassword
+        password: hashedPassword,
+        role: userRole
       });
       await user.save();
 
@@ -101,13 +111,81 @@ export class UsersController {
       return {
         ok: true,
         user: userResponse,
-        message: 'User created successfully'
+        message: `${userRole.charAt(0).toUpperCase() + userRole.slice(1)} user created successfully`
       };
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;
       }
       throw new HttpException('Failed to create user', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  @Post('create-admin')
+  async createAdminUser(@Body() createUserDto: CreateUserDto) {
+    try {
+      // Force role to admin
+      createUserDto.role = 'admin';
+
+      // First, validate that the company exists
+      const company = await this.companyModel.findById(createUserDto.companyId);
+      if (!company) {
+        throw new HttpException('Company not found', HttpStatus.BAD_REQUEST);
+      }
+
+      // Check if admin already exists for this company
+      const existingAdmin = await this.userModel.findOne({
+        companyId: createUserDto.companyId,
+        role: 'admin'
+      });
+
+      if (existingAdmin) {
+        throw new HttpException('Admin user already exists for this company. Use regular user creation endpoint.', HttpStatus.CONFLICT);
+      }
+
+      // Validate password strength
+      const passwordValidation = this.passwordService.validatePasswordStrength(createUserDto.password);
+      if (!passwordValidation.isValid) {
+        throw new HttpException(`Password requirements not met: ${passwordValidation.errors.join(', ')}`, HttpStatus.BAD_REQUEST);
+      }
+
+      // Check if username already exists
+      const existingUser = await this.userModel.findOne({
+        companyId: createUserDto.companyId,
+        username: createUserDto.username
+      });
+
+      if (existingUser) {
+        throw new HttpException('Username already exists in this company', HttpStatus.CONFLICT);
+      }
+
+      // Hash the password before saving
+      const hashedPassword = await this.passwordService.hashPassword(createUserDto.password);
+
+      // Create admin user (no device/location validation required)
+      const adminUser = new this.userModel({
+        companyId: createUserDto.companyId,
+        username: createUserDto.username,
+        password: hashedPassword,
+        displayName: createUserDto.displayName,
+        role: 'admin'
+        // Note: assignedDeviceId and allocatedLocationId are intentionally omitted for admin
+      });
+      await adminUser.save();
+
+      // Return user without password
+      const { password, ...userResponse } = adminUser.toObject();
+
+      return {
+        ok: true,
+        user: userResponse,
+        message: 'Admin user created successfully'
+      };
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException('Failed to create admin user', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
