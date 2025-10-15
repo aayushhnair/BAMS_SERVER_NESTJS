@@ -229,6 +229,92 @@ export class AuthController {
     }
   }
 
+  @Post('verify-session')
+  async verifySession(@Body() body: { sessionId: string }) {
+    try {
+      const session = await this.sessionModel.findById(body.sessionId);
+      
+      if (!session) {
+        return { 
+          ok: false, 
+          valid: false,
+          error: 'Session not found' 
+        };
+      }
+
+      if (session.status !== 'active') {
+        return { 
+          ok: false, 
+          valid: false,
+          error: 'Session is not active',
+          status: session.status
+        };
+      }
+
+      // Get user details
+      const user = await this.userModel.findById(session.userId).select('-password');
+      
+      if (!user) {
+        return { 
+          ok: false, 
+          valid: false,
+          error: 'User not found' 
+        };
+      }
+
+      // Calculate session age and expiry
+      const sessionTimeoutHours = this.configService.get<number>('sessionTimeoutHours') || 12;
+      const sessionAgeMs = Date.now() - session.loginAt.getTime();
+      const sessionAgeHours = sessionAgeMs / (1000 * 60 * 60);
+      const isExpired = sessionAgeHours > sessionTimeoutHours;
+
+      if (isExpired) {
+        // Auto-expire the session
+        await this.sessionModel.updateOne(
+          { _id: body.sessionId },
+          { 
+            logoutAt: new Date(),
+            status: 'expired'
+          }
+        );
+
+        return { 
+          ok: false, 
+          valid: false,
+          error: 'Session expired',
+          expiredAt: new Date().toISOString()
+        };
+      }
+
+      return { 
+        ok: true, 
+        valid: true,
+        session: {
+          sessionId: String(session._id),
+          userId: String(session.userId),
+          deviceId: session.deviceId,
+          loginAt: session.loginAt,
+          lastHeartbeat: session.lastHeartbeat,
+          status: session.status
+        },
+        user: {
+          _id: String(user._id),
+          username: user.username,
+          displayName: user.displayName,
+          role: user.role,
+          companyId: user.companyId
+        },
+        expiresIn: Math.floor((sessionTimeoutHours * 3600) - (sessionAgeMs / 1000)) // remaining seconds
+      };
+    } catch (error) {
+      console.error('Verify session error:', error);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException('Session verification failed', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
   @Post('logout')
   async logout(@Body() logoutDto: LogoutDto) {
     try {
