@@ -255,4 +255,126 @@ export class SessionsController {
       sessions: sessionDetails
     };
   }
+
+  /**
+   * Export user-specific work report as CSV
+   * GET /api/user-work-report/export?userId=...&type=daily|weekly|monthly|yearly&date=...
+   */
+  @Get('user-work-report/export')
+  async exportUserWorkReport(
+    @Query('userId') userId: string,
+    @Query('type') type: 'daily' | 'weekly' | 'monthly' | 'yearly' = 'daily',
+    @Query('date') date?: string,
+    @Res() res?: Response,
+  ) {
+    if (!userId) {
+      throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
+    }
+
+    try {
+      // Determine date range based on type
+      const now = date ? new Date(date) : new Date();
+      let from: Date, to: Date;
+      
+      switch (type) {
+        case 'daily':
+          from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          to = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+          break;
+        case 'weekly': {
+          const day = now.getDay();
+          from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
+          to = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 7);
+          break;
+        }
+        case 'monthly':
+          from = new Date(now.getFullYear(), now.getMonth(), 1);
+          to = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+          break;
+        case 'yearly':
+          from = new Date(now.getFullYear(), 0, 1);
+          to = new Date(now.getFullYear() + 1, 0, 1);
+          break;
+        default:
+          throw new HttpException('Invalid type', HttpStatus.BAD_REQUEST);
+      }
+
+      // Query sessions for user in date range
+      const sessions = await this.sessionModel.find({
+        userId,
+        loginAt: { $gte: from, $lt: to }
+      }).sort({ loginAt: 1 });
+
+      // Get user info
+      const user = await this.userModel.findById(userId);
+      if (!user) {
+        throw new HttpException('User not found', HttpStatus.NOT_FOUND);
+      }
+
+      // Calculate total work hours
+      let totalMinutes = 0;
+      const sessionRows = sessions.map(session => {
+        let workingMinutes = 0;
+        let workingHours = 0;
+        
+        if (session.loginAt && session.logoutAt) {
+          workingMinutes = Math.floor((new Date(session.logoutAt).getTime() - new Date(session.loginAt).getTime()) / 60000);
+          workingHours = parseFloat((workingMinutes / 60).toFixed(2));
+          totalMinutes += workingMinutes;
+        }
+
+        return {
+          sessionId: session._id,
+          loginAt: session.loginAt,
+          logoutAt: session.logoutAt,
+          workingMinutes,
+          workingHours,
+          status: session.status
+        };
+      });
+
+      // Generate CSV
+      const csvHeader = 'User,Username,Report Type,Period From,Period To,Session ID,Login Time,Logout Time,Working Minutes,Working Hours,Status\n';
+      const csvRows = sessionRows.map(row => {
+        return [
+          `"${user.displayName}"`,
+          `"${user.username}"`,
+          `"${type.toUpperCase()}"`,
+          `"${from.toISOString().split('T')[0]}"`,
+          `"${to.toISOString().split('T')[0]}"`,
+          `"${row.sessionId}"`,
+          `"${row.loginAt?.toISOString() || ''}"`,
+          `"${row.logoutAt?.toISOString() || ''}"`,
+          row.workingMinutes,
+          row.workingHours,
+          `"${row.status}"`
+        ].join(',');
+      }).join('\n');
+
+      // Add summary row
+      const totalHours = parseFloat((totalMinutes / 60).toFixed(2));
+      const summaryRow = `\n"TOTAL","${user.username}","${type.toUpperCase()}","${from.toISOString().split('T')[0]}","${to.toISOString().split('T')[0]}","${sessions.length} sessions","","",${totalMinutes},${totalHours},""`;
+
+      const csvContent = csvHeader + csvRows + summaryRow;
+
+      // Send CSV response
+      if (res) {
+        const filename = `user_work_report_${user.username}_${type}_${new Date().toISOString().split('T')[0]}.csv`;
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(csvContent);
+      }
+
+      return {
+        ok: true,
+        data: csvContent
+      };
+    } catch (error) {
+      console.error('Export user work report error:', error);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException('Failed to export user work report', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
 }

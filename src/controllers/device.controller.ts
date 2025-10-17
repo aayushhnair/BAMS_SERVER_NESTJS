@@ -60,10 +60,20 @@ export class DeviceController {
     try {
       const filter = companyId ? { companyId } : {};
       const devices = await this.deviceModel.find(filter);
+      
+      // Handle empty devices list
+      if (devices.length === 0) {
+        return {
+          ok: true,
+          devices: []
+        };
+      }
+      
       // Get company names for each device
       const companyIds = [...new Set(devices.map(d => d.companyId))];
       const companies = await this.companyModel.find({ _id: { $in: companyIds } });
       const companyMap = new Map(companies.map(c => [String(c._id), c.name]));
+      
       return {
         ok: true,
         devices: devices.map(device => ({
@@ -73,10 +83,12 @@ export class DeviceController {
           name: device.name,
           companyId: device.companyId,
           companyName: companyMap.get(device.companyId) || 'Unknown',
+          assignedTo: device.assignedTo || null,
           lastSeen: device.lastSeen
         }))
       };
     } catch (error) {
+      console.error('Error fetching devices:', error);
       throw new HttpException('Failed to fetch devices', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
