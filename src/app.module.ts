@@ -42,6 +42,14 @@ import { AuthMiddleware } from './middleware/auth.middleware';
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
         uri: configService.get<string>('mongoUri'),
+        // Production-ready connection pool configuration
+        maxPoolSize: 10, // Maximum number of connections in the pool
+        minPoolSize: 2, // Minimum number of connections
+        socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
+        serverSelectionTimeoutMS: 5000, // How long to wait for server selection
+        heartbeatFrequencyMS: 10000, // Check server health every 10 seconds
+        retryWrites: true, // Retry writes on network errors
+        w: 'majority', // Write concern - wait for majority of nodes
       }),
       inject: [ConfigService],
     }),

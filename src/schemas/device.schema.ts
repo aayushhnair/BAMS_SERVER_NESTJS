@@ -26,5 +26,7 @@ export class Device {
 
 export const DeviceSchema = SchemaFactory.createForClass(Device);
 
-// Create unique index on deviceId
-DeviceSchema.index({ deviceId: 1 }, { unique: true });
+// Create indexes for optimal query performance
+DeviceSchema.index({ deviceId: 1 }, { unique: true }); // Primary device lookup
+DeviceSchema.index({ companyId: 1 }); // Company device queries
+DeviceSchema.index({ assignedTo: 1 }, { sparse: true }); // Assignment tracking

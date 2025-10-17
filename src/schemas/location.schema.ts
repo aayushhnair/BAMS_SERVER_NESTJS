@@ -35,5 +35,6 @@ export class Location {
 
 export const LocationSchema = SchemaFactory.createForClass(Location);
 
-// Create 2dsphere index for geospatial queries
-LocationSchema.index({ coords: '2dsphere' });
+// Create indexes for optimal query performance
+LocationSchema.index({ coords: '2dsphere' }); // Geospatial queries
+LocationSchema.index({ companyId: 1 }); // Company location lookups

@@ -51,5 +51,10 @@ export class Session {
 
 export const SessionSchema = SchemaFactory.createForClass(Session);
 
-// Create compound index
-SessionSchema.index({ userId: 1, loginAt: -1 });
+// Create indexes for optimal query performance
+SessionSchema.index({ userId: 1, loginAt: -1 }); // User session history
+SessionSchema.index({ companyId: 1, loginAt: -1 }); // Company attendance queries
+SessionSchema.index({ userId: 1, status: 1 }); // Active session checks
+SessionSchema.index({ status: 1, lastHeartbeat: 1 }); // Auto-logout maintenance
+SessionSchema.index({ loginAt: 1 }); // Date range queries
+SessionSchema.index({ deviceId: 1 }); // Device tracking

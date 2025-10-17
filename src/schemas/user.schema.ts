@@ -29,7 +29,11 @@ export class User {
 
 export const UserSchema = SchemaFactory.createForClass(User);
 
-// Create compound unique index for users with companies
+// Create indexes for optimal query performance
+// Compound unique index for users with companies
 UserSchema.index({ companyId: 1, username: 1 }, { unique: true, sparse: true });
-// Create unique index for admin users without companies
+// Unique index for admin users without companies
 UserSchema.index({ username: 1 }, { unique: true, partialFilterExpression: { companyId: { $exists: false } } });
+// Additional indexes for queries
+UserSchema.index({ companyId: 1, role: 1 }); // Company user filtering
+UserSchema.index({ assignedDeviceId: 1 }, { sparse: true }); // Device assignment lookups

@@ -162,15 +162,35 @@ export class UsersController {
       // Hash the password before saving
       const hashedPassword = await this.passwordService.hashPassword(createUserDto.password);
 
-      // Create standalone admin user (no company, device, or location required)
+      // Auto-create a virtual device for admin user to avoid dependency issues
+      const adminDeviceId = `admin-device-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Create virtual device for admin
+      const adminDevice = new this.deviceModel({
+        deviceId: adminDeviceId,
+        serial: `ADMIN-VIRTUAL-${Date.now()}`,
+        name: `Admin Device for ${createUserDto.displayName}`,
+        companyId: 'ADMIN-GLOBAL', // Global admin company placeholder
+        lastSeen: new Date()
+      });
+      await adminDevice.save();
+
+      // Create standalone admin user with auto-assigned device
       const adminUser = new this.userModel({
         username: createUserDto.username,
         password: hashedPassword,
         displayName: createUserDto.displayName,
-        role: 'admin'
-        // Note: companyId, assignedDeviceId and allocatedLocationId are intentionally omitted for standalone admin
+        role: 'admin',
+        assignedDeviceId: adminDeviceId // Auto-assigned virtual device
+        // Note: companyId and allocatedLocationId are intentionally omitted for standalone admin
       });
       await adminUser.save();
+
+      // Update device assignment
+      await this.deviceModel.updateOne(
+        { deviceId: adminDeviceId },
+        { assignedTo: adminUser._id }
+      );
 
       // Return user without password
       const { password, ...userResponse } = adminUser.toObject();
@@ -178,7 +198,8 @@ export class UsersController {
       return {
         ok: true,
         user: userResponse,
-        message: 'Standalone admin user created successfully'
+        deviceId: adminDeviceId,
+        message: 'Standalone admin user created successfully with auto-assigned device'
       };
     } catch (error) {
       if (error instanceof HttpException) {

@@ -286,6 +286,11 @@ export class AuthController {
         };
       }
 
+      // Calculate time since last heartbeat
+      const timeSinceLastHeartbeatMs = session.lastHeartbeat 
+        ? Date.now() - session.lastHeartbeat.getTime() 
+        : 0;
+
       return { 
         ok: true, 
         valid: true,
@@ -295,6 +300,7 @@ export class AuthController {
           deviceId: session.deviceId,
           loginAt: session.loginAt,
           lastHeartbeat: session.lastHeartbeat,
+          timeSinceLastHeartbeatMs, // Time elapsed since last heartbeat
           status: session.status
         },
         user: {
