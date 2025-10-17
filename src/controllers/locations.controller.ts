@@ -58,4 +58,19 @@ export class LocationsController {
       throw new HttpException('Failed to fetch locations', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
+  /**
+   * DELETE /api/locations/:id
+   * Deletes a location by its ID
+   */
+  @Post('delete')
+  async deleteLocation(@Body('id') id: string) {
+    if (!id) {
+      throw new HttpException('Location id is required', HttpStatus.BAD_REQUEST);
+    }
+    const result = await this.locationModel.deleteOne({ _id: id });
+    if (result.deletedCount === 0) {
+      throw new HttpException('Location not found', HttpStatus.NOT_FOUND);
+    }
+    return { ok: true, message: 'Location deleted successfully', id };
+  }
 }

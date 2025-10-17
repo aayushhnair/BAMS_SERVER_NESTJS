@@ -18,6 +18,8 @@ export class SessionsController {
     @Query('userId') userId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('skip') skip?: string,
+    @Query('limit') limit?: string,
   ) {
     try {
       const filter: any = {};
@@ -31,7 +33,18 @@ export class SessionsController {
         if (to) filter.loginAt.$lte = new Date(to);
       }
 
-      const sessions = await this.sessionModel.find(filter).sort({ loginAt: -1 });
+      // Pagination
+      const skipCount = skip ? parseInt(skip, 10) : 0;
+      const limitCount = limit ? parseInt(limit, 10) : 100; // Default limit 100
+
+      // Get total count for pagination metadata
+      const totalCount = await this.sessionModel.countDocuments(filter);
+
+      const sessions = await this.sessionModel
+        .find(filter)
+        .sort({ loginAt: -1 })
+        .skip(skipCount)
+        .limit(limitCount);
 
       // Get user details for display names
       const userIds = [...new Set(sessions.map(s => s.userId))];
@@ -40,22 +53,47 @@ export class SessionsController {
 
       return {
         ok: true,
-        sessions: sessions.map(session => ({
-          sessionId: session._id,
-          companyId: session.companyId,
-          userId: session.userId,
-          userDisplayName: userMap.get(session.userId)?.displayName || 'Unknown',
-          deviceId: session.deviceId,
-          loginAt: session.loginAt,
-          logoutAt: session.logoutAt,
-          status: session.status,
-          lastHeartbeat: session.lastHeartbeat,
-          loginLocation: {
-            lat: session.loginLocation.coordinates[1],
-            lon: session.loginLocation.coordinates[0],
-            accuracy: session.loginLocation.accuracy
+        total: totalCount,
+        skip: skipCount,
+        limit: limitCount,
+        count: sessions.length,
+        sessions: sessions.map(session => {
+          const user = userMap.get(session.userId);
+          
+          // Calculate work hours
+          let workingHours = 0;
+          let workingMinutes = 0;
+          if (session.loginAt && session.logoutAt) {
+            const duration = new Date(session.logoutAt).getTime() - new Date(session.loginAt).getTime();
+            workingMinutes = Math.floor(duration / 60000);
+            workingHours = parseFloat((workingMinutes / 60).toFixed(2));
           }
-        }))
+
+          return {
+            sessionId: session._id,
+            companyId: session.companyId,
+            userId: session.userId,
+            username: user?.username || 'unknown',
+            userDisplayName: user?.displayName || 'Unknown',
+            deviceId: session.deviceId,
+            loginAt: session.loginAt,
+            logoutAt: session.logoutAt,
+            workingHours,
+            workingMinutes,
+            status: session.status,
+            lastHeartbeat: session.lastHeartbeat,
+            loginLocation: session.loginLocation ? {
+              lat: session.loginLocation.coordinates[1],
+              lon: session.loginLocation.coordinates[0],
+              accuracy: session.loginLocation.accuracy
+            } : null,
+            logoutLocation: session['logoutLocation'] ? {
+              lat: session['logoutLocation'].coordinates[1],
+              lon: session['logoutLocation'].coordinates[0],
+              accuracy: session['logoutLocation'].accuracy
+            } : null
+          };
+        })
       };
     } catch (error) {
       throw new HttpException('Failed to fetch sessions', HttpStatus.INTERNAL_SERVER_ERROR);
@@ -142,5 +180,79 @@ export class SessionsController {
     } catch (error) {
       throw new HttpException('Failed to export sessions', HttpStatus.INTERNAL_SERVER_ERROR);
     }
+  }
+  /**
+   * User-specific work report API
+   * GET /api/user-work-report?userId=...&type=daily|weekly|monthly|yearly
+   * Returns work hours and session details for the specified user and period
+   */
+  @Get('user-work-report')
+  async getUserWorkReport(
+    @Query('userId') userId: string,
+    @Query('type') type: 'daily' | 'weekly' | 'monthly' | 'yearly' = 'daily',
+    @Query('date') date?: string // Optional, defaults to today
+  ) {
+    if (!userId) {
+      throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
+    }
+    // Determine date range based on type
+    const now = date ? new Date(date) : new Date();
+    let from: Date, to: Date;
+    switch (type) {
+      case 'daily':
+        from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        to = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        break;
+      case 'weekly': {
+        const day = now.getDay();
+        from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
+        to = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 7);
+        break;
+      }
+      case 'monthly':
+        from = new Date(now.getFullYear(), now.getMonth(), 1);
+        to = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        break;
+      case 'yearly':
+        from = new Date(now.getFullYear(), 0, 1);
+        to = new Date(now.getFullYear() + 1, 0, 1);
+        break;
+      default:
+        throw new HttpException('Invalid type', HttpStatus.BAD_REQUEST);
+    }
+    // Query sessions for user in date range
+    const sessions = await this.sessionModel.find({
+      userId,
+      loginAt: { $gte: from, $lt: to }
+    }).sort({ loginAt: 1 });
+    // Calculate total work hours
+    let totalMinutes = 0;
+    const sessionDetails = sessions.map(session => {
+      let workingMinutes = 0;
+      if (session.loginAt && session.logoutAt) {
+        workingMinutes = Math.floor((new Date(session.logoutAt).getTime() - new Date(session.loginAt).getTime()) / 60000);
+        totalMinutes += workingMinutes;
+      }
+      return {
+        sessionId: session._id,
+        loginAt: session.loginAt,
+        logoutAt: session.logoutAt,
+        workingMinutes,
+        status: session.status
+      };
+    });
+    // Get user info
+    const user = await this.userModel.findById(userId);
+    return {
+      ok: true,
+      user: user ? { userId: user._id, username: user.username, displayName: user.displayName } : null,
+      type,
+      from,
+      to,
+      totalSessions: sessions.length,
+      totalWorkingMinutes: totalMinutes,
+      totalWorkingHours: parseFloat((totalMinutes / 60).toFixed(2)),
+      sessions: sessionDetails
+    };
   }
 }

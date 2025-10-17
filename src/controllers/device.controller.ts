@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, HttpException, HttpStatus, Get, Delete, Query, Param } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Device, DeviceDocument } from '../schemas/device.schema';
@@ -44,7 +44,8 @@ export class DeviceController {
       return {
         ok: true,
         deviceId: device.deviceId,
-        message: 'Device registered successfully'
+            companyName: company.name,
+            message: 'Device registered successfully'
       };
     } catch (error) {
       if (error instanceof HttpException) {
@@ -53,4 +54,48 @@ export class DeviceController {
       throw new HttpException('Failed to register device', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
+
+  @Get()
+  async getDevices(@Query('companyId') companyId?: string) {
+    try {
+      const filter = companyId ? { companyId } : {};
+      const devices = await this.deviceModel.find(filter);
+      // Get company names for each device
+      const companyIds = [...new Set(devices.map(d => d.companyId))];
+      const companies = await this.companyModel.find({ _id: { $in: companyIds } });
+      const companyMap = new Map(companies.map(c => [String(c._id), c.name]));
+      return {
+        ok: true,
+        devices: devices.map(device => ({
+          id: device._id,
+          deviceId: device.deviceId,
+          serial: device.serial,
+          name: device.name,
+          companyId: device.companyId,
+          companyName: companyMap.get(device.companyId) || 'Unknown',
+          lastSeen: device.lastSeen
+        }))
+      };
+    } catch (error) {
+      throw new HttpException('Failed to fetch devices', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  @Delete(':id')
+  async deleteDevice(@Param('id') id: string) {
+    try {
+      const device = await this.deviceModel.findById(id);
+      if (!device) {
+        throw new HttpException('Device not found', HttpStatus.NOT_FOUND);
+      }
+      await device.deleteOne();
+      return {
+        ok: true,
+        message: 'Device deleted successfully'
+      };
+    } catch (error) {
+      throw new HttpException('Failed to delete device', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
 }
+
