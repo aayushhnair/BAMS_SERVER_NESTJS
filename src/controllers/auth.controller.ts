@@ -177,8 +177,7 @@ export class AuthController {
       }
 
       // Create new session
-      const session = new this.sessionModel({
-        companyId: user.companyId,
+      const sessionData: any = {
         userId: user._id,
         deviceId: loginDto.deviceId,
         loginAt: currentTime,
@@ -189,7 +188,14 @@ export class AuthController {
         },
         status: 'active',
         lastHeartbeat: currentTime
-      });
+      };
+      
+      // Only add companyId if user has one (not for standalone admins)
+      if (user.companyId) {
+        sessionData.companyId = user.companyId;
+      }
+      
+      const session = new this.sessionModel(sessionData);
 
       await session.save();
       const sessionId = String(session._id);

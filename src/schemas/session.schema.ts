@@ -5,8 +5,8 @@ export type SessionDocument = Session & Document;
 
 @Schema()
 export class Session {
-  @Prop({ required: true })
-  companyId: string;
+  @Prop({ required: false }) // Optional for admin users who don't have companyId
+  companyId?: string;
 
   @Prop({ required: true })
   userId: string;

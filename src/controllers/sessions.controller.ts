@@ -12,6 +12,84 @@ export class SessionsController {
     @InjectModel(User.name) private userModel: Model<UserDocument>,
   ) {}
 
+  /**
+   * Convert UTC date to IST (UTC+5:30)
+   */
+  private toIST(date: Date): Date {
+    const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in milliseconds
+    return new Date(date.getTime() + istOffset);
+  }
+
+  /**
+   * Format date to IST string
+   */
+  private formatISTDate(date: Date): string {
+    if (!date) return '';
+    const ist = this.toIST(date);
+    return ist.toISOString().replace('Z', '+05:30');
+  }
+
+  /**
+   * Get start and end of day in IST
+   */
+  private getISTDayRange(date: Date): { from: Date; to: Date } {
+    // Parse the input date as IST
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const day = date.getDate();
+    
+    // Create IST midnight (00:00:00) for the given date
+    const istMidnight = new Date(year, month, day, 0, 0, 0, 0);
+    // Convert IST to UTC by subtracting 5:30
+    const utcFrom = new Date(istMidnight.getTime() - (5.5 * 60 * 60 * 1000));
+    
+    // Create IST end of day (23:59:59.999)
+    const istEndOfDay = new Date(year, month, day + 1, 0, 0, 0, 0);
+    const utcTo = new Date(istEndOfDay.getTime() - (5.5 * 60 * 60 * 1000));
+    
+    return { from: utcFrom, to: utcTo };
+  }
+
+  /**
+   * Get start and end of week in IST (Sunday to Saturday)
+   */
+  private getISTWeekRange(date: Date): { from: Date; to: Date } {
+    const day = date.getDay();
+    const istStartOfWeek = new Date(date.getFullYear(), date.getMonth(), date.getDate() - day, 0, 0, 0, 0);
+    const istEndOfWeek = new Date(date.getFullYear(), date.getMonth(), date.getDate() - day + 7, 0, 0, 0, 0);
+    
+    const utcFrom = new Date(istStartOfWeek.getTime() - (5.5 * 60 * 60 * 1000));
+    const utcTo = new Date(istEndOfWeek.getTime() - (5.5 * 60 * 60 * 1000));
+    
+    return { from: utcFrom, to: utcTo };
+  }
+
+  /**
+   * Get start and end of month in IST
+   */
+  private getISTMonthRange(date: Date): { from: Date; to: Date } {
+    const istStartOfMonth = new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
+    const istEndOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 1, 0, 0, 0, 0);
+    
+    const utcFrom = new Date(istStartOfMonth.getTime() - (5.5 * 60 * 60 * 1000));
+    const utcTo = new Date(istEndOfMonth.getTime() - (5.5 * 60 * 60 * 1000));
+    
+    return { from: utcFrom, to: utcTo };
+  }
+
+  /**
+   * Get start and end of year in IST
+   */
+  private getISTYearRange(date: Date): { from: Date; to: Date } {
+    const istStartOfYear = new Date(date.getFullYear(), 0, 1, 0, 0, 0, 0);
+    const istEndOfYear = new Date(date.getFullYear() + 1, 0, 1, 0, 0, 0, 0);
+    
+    const utcFrom = new Date(istStartOfYear.getTime() - (5.5 * 60 * 60 * 1000));
+    const utcTo = new Date(istEndOfYear.getTime() - (5.5 * 60 * 60 * 1000));
+    
+    return { from: utcFrom, to: utcTo };
+  }
+
   @Get('sessions')
   async getSessions(
     @Query('companyId') companyId?: string,
@@ -91,7 +169,11 @@ export class SessionsController {
               lat: session['logoutLocation'].coordinates[1],
               lon: session['logoutLocation'].coordinates[0],
               accuracy: session['logoutLocation'].accuracy
-            } : null
+            } : null,
+            // IST formatted times
+            loginAtIST: this.formatISTDate(session.loginAt),
+            logoutAtIST: session.logoutAt ? this.formatISTDate(session.logoutAt) : null,
+            lastHeartbeatIST: session.lastHeartbeat ? this.formatISTDate(session.lastHeartbeat) : null
           };
         })
       };
@@ -127,30 +209,44 @@ export class SessionsController {
       const userMap = new Map(users.map(u => [String(u._id), u]));
 
       if (format === 'csv') {
-        const csvHeader = 'SessionId,CompanyId,UserId,UserDisplayName,DeviceId,LoginAt,LogoutAt,Status,LastHeartbeat,LoginLat,LoginLon,LoginAccuracy\n';
+        const csvHeader = 'SessionId,CompanyId,UserId,UserDisplayName,DeviceId,LoginAt (IST),LogoutAt (IST),Status,LastHeartbeat (IST),LoginLat,LoginLon,LoginAccuracy,WorkingHours,WorkingMinutes\n';
         const csvRows = sessions.map(session => {
           const user = userMap.get(session.userId);
+          
+          // Calculate work hours
+          let workingHours = 0;
+          let workingMinutes = 0;
+          if (session.loginAt && session.logoutAt) {
+            const duration = new Date(session.logoutAt).getTime() - new Date(session.loginAt).getTime();
+            workingMinutes = Math.floor(duration / 60000);
+            workingHours = parseFloat((workingMinutes / 60).toFixed(2));
+          }
+          
           return [
             session._id,
-            session.companyId,
+            session.companyId || '',
             session.userId,
             user?.displayName || 'Unknown',
             session.deviceId,
-            session.loginAt?.toISOString() || '',
-            session.logoutAt?.toISOString() || '',
+            this.formatISTDate(session.loginAt),
+            session.logoutAt ? this.formatISTDate(session.logoutAt) : '',
             session.status,
-            session.lastHeartbeat?.toISOString() || '',
+            session.lastHeartbeat ? this.formatISTDate(session.lastHeartbeat) : '',
             session.loginLocation.coordinates[1],
             session.loginLocation.coordinates[0],
-            session.loginLocation.accuracy
+            session.loginLocation.accuracy,
+            workingHours,
+            workingMinutes
           ].map(field => `"${field || ''}"`).join(',');
         }).join('\n');
 
         const csvContent = csvHeader + csvRows;
 
         if (res) {
-          res.setHeader('Content-Type', 'text/csv');
-          res.setHeader('Content-Disposition', `attachment; filename="sessions_export_${new Date().toISOString().split('T')[0]}.csv"`);
+          const istNow = this.toIST(new Date());
+          const dateStr = `${istNow.getFullYear()}${String(istNow.getMonth() + 1).padStart(2, '0')}${String(istNow.getDate()).padStart(2, '0')}`;
+          res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+          res.setHeader('Content-Disposition', `attachment; filename="sessions_export_${dateStr}_IST.csv"`);
           return res.send(csvContent);
         }
         
@@ -185,46 +281,45 @@ export class SessionsController {
    * User-specific work report API
    * GET /api/user-work-report?userId=...&type=daily|weekly|monthly|yearly
    * Returns work hours and session details for the specified user and period
+   * All dates are in IST (Indian Standard Time, UTC+5:30)
    */
   @Get('user-work-report')
   async getUserWorkReport(
     @Query('userId') userId: string,
     @Query('type') type: 'daily' | 'weekly' | 'monthly' | 'yearly' = 'daily',
-    @Query('date') date?: string // Optional, defaults to today
+    @Query('date') date?: string // Optional, defaults to today (IST)
   ) {
     if (!userId) {
       throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
     }
-    // Determine date range based on type
+    
+    // Parse date in IST context
     const now = date ? new Date(date) : new Date();
     let from: Date, to: Date;
+    
     switch (type) {
       case 'daily':
-        from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        to = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        ({ from, to } = this.getISTDayRange(now));
         break;
-      case 'weekly': {
-        const day = now.getDay();
-        from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
-        to = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 7);
+      case 'weekly':
+        ({ from, to } = this.getISTWeekRange(now));
         break;
-      }
       case 'monthly':
-        from = new Date(now.getFullYear(), now.getMonth(), 1);
-        to = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        ({ from, to } = this.getISTMonthRange(now));
         break;
       case 'yearly':
-        from = new Date(now.getFullYear(), 0, 1);
-        to = new Date(now.getFullYear() + 1, 0, 1);
+        ({ from, to } = this.getISTYearRange(now));
         break;
       default:
         throw new HttpException('Invalid type', HttpStatus.BAD_REQUEST);
     }
-    // Query sessions for user in date range
+    
+    // Query sessions for user in date range (stored as UTC in DB)
     const sessions = await this.sessionModel.find({
       userId,
       loginAt: { $gte: from, $lt: to }
     }).sort({ loginAt: 1 });
+    
     // Calculate total work hours
     let totalMinutes = 0;
     const sessionDetails = sessions.map(session => {
@@ -235,20 +330,23 @@ export class SessionsController {
       }
       return {
         sessionId: session._id,
-        loginAt: session.loginAt,
-        logoutAt: session.logoutAt,
+        loginAt: this.formatISTDate(session.loginAt),
+        logoutAt: session.logoutAt ? this.formatISTDate(session.logoutAt) : null,
         workingMinutes,
         status: session.status
       };
     });
+    
     // Get user info
     const user = await this.userModel.findById(userId);
+    
     return {
       ok: true,
+      timezone: 'IST (UTC+5:30)',
       user: user ? { userId: user._id, username: user.username, displayName: user.displayName } : null,
       type,
-      from,
-      to,
+      from: this.formatISTDate(from),
+      to: this.formatISTDate(to),
       totalSessions: sessions.length,
       totalWorkingMinutes: totalMinutes,
       totalWorkingHours: parseFloat((totalMinutes / 60).toFixed(2)),
@@ -259,6 +357,7 @@ export class SessionsController {
   /**
    * Export user-specific work report as CSV
    * GET /api/user-work-report/export?userId=...&type=daily|weekly|monthly|yearly&date=...
+   * All dates and times are in IST (Indian Standard Time, UTC+5:30)
    */
   @Get('user-work-report/export')
   async exportUserWorkReport(
@@ -272,34 +371,28 @@ export class SessionsController {
     }
 
     try {
-      // Determine date range based on type
+      // Parse date in IST context
       const now = date ? new Date(date) : new Date();
       let from: Date, to: Date;
       
       switch (type) {
         case 'daily':
-          from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-          to = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+          ({ from, to } = this.getISTDayRange(now));
           break;
-        case 'weekly': {
-          const day = now.getDay();
-          from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
-          to = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 7);
+        case 'weekly':
+          ({ from, to } = this.getISTWeekRange(now));
           break;
-        }
         case 'monthly':
-          from = new Date(now.getFullYear(), now.getMonth(), 1);
-          to = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+          ({ from, to } = this.getISTMonthRange(now));
           break;
         case 'yearly':
-          from = new Date(now.getFullYear(), 0, 1);
-          to = new Date(now.getFullYear() + 1, 0, 1);
+          ({ from, to } = this.getISTYearRange(now));
           break;
         default:
           throw new HttpException('Invalid type', HttpStatus.BAD_REQUEST);
       }
 
-      // Query sessions for user in date range
+      // Query sessions for user in date range (stored as UTC in DB)
       const sessions = await this.sessionModel.find({
         userId,
         loginAt: { $gte: from, $lt: to }
@@ -311,7 +404,7 @@ export class SessionsController {
         throw new HttpException('User not found', HttpStatus.NOT_FOUND);
       }
 
-      // Calculate total work hours
+      // Calculate total work hours and prepare session data
       let totalMinutes = 0;
       const sessionRows = sessions.map(session => {
         let workingMinutes = 0;
@@ -333,18 +426,24 @@ export class SessionsController {
         };
       });
 
-      // Generate CSV
-      const csvHeader = 'User,Username,Report Type,Period From,Period To,Session ID,Login Time,Logout Time,Working Minutes,Working Hours,Status\n';
+      // Format IST dates for display
+      const istFrom = this.toIST(from);
+      const istTo = this.toIST(to);
+      const periodFromStr = `${istFrom.getFullYear()}-${String(istFrom.getMonth() + 1).padStart(2, '0')}-${String(istFrom.getDate()).padStart(2, '0')}`;
+      const periodToStr = `${istTo.getFullYear()}-${String(istTo.getMonth() + 1).padStart(2, '0')}-${String(istTo.getDate()).padStart(2, '0')}`;
+
+      // Generate CSV with IST timezone info
+      const csvHeader = 'User,Username,Report Type,Period From (IST),Period To (IST),Session ID,Login Time (IST),Logout Time (IST),Working Minutes,Working Hours,Status\n';
       const csvRows = sessionRows.map(row => {
         return [
           `"${user.displayName}"`,
           `"${user.username}"`,
           `"${type.toUpperCase()}"`,
-          `"${from.toISOString().split('T')[0]}"`,
-          `"${to.toISOString().split('T')[0]}"`,
+          `"${periodFromStr}"`,
+          `"${periodToStr}"`,
           `"${row.sessionId}"`,
-          `"${row.loginAt?.toISOString() || ''}"`,
-          `"${row.logoutAt?.toISOString() || ''}"`,
+          `"${this.formatISTDate(row.loginAt)}"`,
+          `"${row.logoutAt ? this.formatISTDate(row.logoutAt) : ''}"`,
           row.workingMinutes,
           row.workingHours,
           `"${row.status}"`
@@ -353,14 +452,16 @@ export class SessionsController {
 
       // Add summary row
       const totalHours = parseFloat((totalMinutes / 60).toFixed(2));
-      const summaryRow = `\n"TOTAL","${user.username}","${type.toUpperCase()}","${from.toISOString().split('T')[0]}","${to.toISOString().split('T')[0]}","${sessions.length} sessions","","",${totalMinutes},${totalHours},""`;
+      const summaryRow = `\n"TOTAL","${user.username}","${type.toUpperCase()}","${periodFromStr}","${periodToStr}","${sessions.length} sessions","","",${totalMinutes},${totalHours},""`;
 
       const csvContent = csvHeader + csvRows + summaryRow;
 
       // Send CSV response
       if (res) {
-        const filename = `user_work_report_${user.username}_${type}_${new Date().toISOString().split('T')[0]}.csv`;
-        res.setHeader('Content-Type', 'text/csv');
+        const istNow = this.toIST(new Date());
+        const dateStr = `${istNow.getFullYear()}${String(istNow.getMonth() + 1).padStart(2, '0')}${String(istNow.getDate()).padStart(2, '0')}`;
+        const filename = `user_work_report_${user.username}_${type}_${dateStr}_IST.csv`;
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         return res.send(csvContent);
       }
