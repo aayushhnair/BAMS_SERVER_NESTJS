@@ -150,7 +150,24 @@ export class UsersController {
         throw new HttpException(`Password requirements not met: ${passwordValidation.errors.join(', ')}`, HttpStatus.BAD_REQUEST);
       }
 
-      // Check if admin already exists with this username (global check since admin doesn't need company)
+      // Validate companyId is provided - MANDATORY for admin creation
+      if (!createUserDto.companyId) {
+        throw new HttpException(
+          'Company ID is required for admin user creation. Admins must be allocated to a specific company.',
+          HttpStatus.BAD_REQUEST
+        );
+      }
+
+      // Verify that the company exists
+      const company = await this.companyModel.findById(createUserDto.companyId);
+      if (!company) {
+        throw new HttpException(
+          'Invalid Company ID. The specified company does not exist.',
+          HttpStatus.NOT_FOUND
+        );
+      }
+
+      // Check if admin already exists with this username
       const existingUser = await this.userModel.findOne({
         username: createUserDto.username
       });
@@ -165,24 +182,24 @@ export class UsersController {
       // Auto-create a virtual device for admin user to avoid dependency issues
       const adminDeviceId = `admin-device-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
-      // Create virtual device for admin
+      // Create virtual device for admin with company-specific allocation
       const adminDevice = new this.deviceModel({
         deviceId: adminDeviceId,
         serial: `ADMIN-VIRTUAL-${Date.now()}`,
         name: `Admin Device for ${createUserDto.displayName}`,
-        companyId: 'ADMIN-GLOBAL', // Global admin company placeholder
+        companyId: createUserDto.companyId, // Use admin's company instead of ADMIN-GLOBAL
         lastSeen: new Date()
       });
       await adminDevice.save();
 
-      // Create standalone admin user with auto-assigned device
+      // Create admin user with company allocation
       const adminUser = new this.userModel({
         username: createUserDto.username,
         password: hashedPassword,
         displayName: createUserDto.displayName,
         role: 'admin',
+        companyId: createUserDto.companyId, // Assign admin to specific company
         assignedDeviceId: adminDeviceId // Auto-assigned virtual device
-        // Note: companyId and allocatedLocationId are intentionally omitted for standalone admin
       });
       await adminUser.save();
 
@@ -198,6 +215,8 @@ export class UsersController {
       return {
         ok: true,
         user: userResponse,
+        companyId: createUserDto.companyId,
+        companyName: company.name,
         deviceId: adminDeviceId,
         message: 'Standalone admin user created successfully with auto-assigned device'
       };

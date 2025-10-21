@@ -20,18 +20,31 @@ export class HeartbeatController {
       const session = await this.sessionModel.findById(heartbeatDto.sessionId);
       
       if (!session) {
-        throw new HttpException('Session not found', HttpStatus.UNAUTHORIZED);
+        throw new HttpException({
+          message: 'Session not found. Please login again.',
+          error: 'SESSION_NOT_FOUND',
+          login_status: false
+        }, HttpStatus.UNAUTHORIZED);
       }
 
       if (session.deviceId !== heartbeatDto.deviceId) {
-        throw new HttpException('Device mismatch', HttpStatus.FORBIDDEN);
+        throw new HttpException({
+          message: 'Device mismatch detected. Please login again from the correct device.',
+          error: 'DEVICE_MISMATCH',
+          login_status: false
+        }, HttpStatus.FORBIDDEN);
       }
 
       if (session.status !== 'active') {
-        throw new HttpException('Session not active', HttpStatus.UNAUTHORIZED);
+        throw new HttpException({
+          message: `Your session is ${session.status}. Please login again.`,
+          error: 'SESSION_NOT_ACTIVE',
+          sessionStatus: session.status,
+          login_status: false
+        }, HttpStatus.UNAUTHORIZED);
       }
 
-      // Check if session has expired based on SESSION_TIMEOUT_HOURS
+      // Check if session has exceeded maximum duration (SESSION_TIMEOUT_HOURS)
       const sessionTimeoutHours = this.configService.get<number>('sessionTimeoutHours') || 8;
       const sessionAgeMs = Date.now() - session.loginAt.getTime();
       const sessionAgeHours = sessionAgeMs / (1000 * 60 * 60);
@@ -45,27 +58,66 @@ export class HeartbeatController {
             status: 'expired'
           }
         );
-        throw new HttpException('Session expired', HttpStatus.UNAUTHORIZED);
+        throw new HttpException({
+          message: `Your session has exceeded the maximum duration of ${sessionTimeoutHours} hours. Please login again.`,
+          error: 'SESSION_EXPIRED',
+          maxDurationHours: sessionTimeoutHours,
+          login_status: false
+        }, HttpStatus.UNAUTHORIZED);
+      }
+
+      // Check if too much time has passed since last heartbeat (heartbeat timeout)
+      const heartbeatTimeoutMinutes = this.configService.get<number>('heartbeatIntervalMinutes') || 5;
+      const heartbeatTimeoutMs = heartbeatTimeoutMinutes * 60 * 1000;
+      const timeSinceLastHeartbeat = Date.now() - session.lastHeartbeat.getTime();
+
+      if (timeSinceLastHeartbeat > heartbeatTimeoutMs * 2) {
+        // Heartbeat gap is too large - auto-logout for security
+        await this.sessionModel.updateOne(
+          { _id: heartbeatDto.sessionId },
+          { 
+            logoutAt: new Date(),
+            status: 'heartbeat_timeout'
+          }
+        );
+        throw new HttpException({
+          message: `Your session timed out due to inactivity (no heartbeat for ${Math.floor(timeSinceLastHeartbeat / 60000)} minutes). Please login again.`,
+          error: 'HEARTBEAT_TIMEOUT',
+          inactiveMinutes: Math.floor(timeSinceLastHeartbeat / 60000),
+          expectedIntervalMinutes: heartbeatTimeoutMinutes,
+          login_status: false
+        }, HttpStatus.UNAUTHORIZED);
       }
 
       // Update session heartbeat
+      const currentTime = new Date();
       await this.sessionModel.updateOne(
         { _id: heartbeatDto.sessionId },
-        { lastHeartbeat: new Date() }
+        { lastHeartbeat: currentTime }
       );
 
       // Update device lastSeen
       await this.deviceModel.updateOne(
         { deviceId: heartbeatDto.deviceId },
-        { lastSeen: new Date() }
+        { lastSeen: currentTime }
       );
 
-      return { ok: true, message: 'Heartbeat updated' };
+      return { 
+        ok: true, 
+        login_status: true,
+        message: 'Heartbeat updated successfully',
+        sessionId: heartbeatDto.sessionId,
+        lastHeartbeat: currentTime.toISOString()
+      };
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;
       }
-      throw new HttpException('Heartbeat failed', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException({
+        message: 'Heartbeat update failed. Please try again.',
+        error: 'HEARTBEAT_FAILED',
+        login_status: false
+      }, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 }

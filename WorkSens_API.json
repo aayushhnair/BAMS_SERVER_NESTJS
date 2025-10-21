@@ -1,0 +1,900 @@
+{
+	"info": {
+		"name": "BAMS - Attendance Monitoring System",
+		"description": "Complete API collection for Bhishma Attendance Monitoring System (BAMS)\n\nBase URL: https://bamsserver.vercel.app\n\nFeatures:\n- User Authentication & Session Management\n- Company & Location Management\n- Device Management\n- Attendance Tracking with Heartbeat\n- Session Reports & CSV Exports\n\nUpdate the {{baseUrl}} variable to switch between local and production environments.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Login",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"admin123\",\n  \"password\": \"SecurePass123!\",\n  \"deviceId\": \"DEVICE-001\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/login",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"login"
+							]
+						},
+						"description": "Login user and create a new session.\n\nReturns:\n- sessionId: Use this for all authenticated requests\n- expiresIn: Session expiry time in seconds\n- companyId: User's company ID for frontend routing\n- role: User role (admin/employee)"
+					},
+					"response": []
+				},
+				{
+					"name": "Verify Session",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"sessionId\": \"{{sessionId}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/verify-session",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"verify-session"
+							]
+						},
+						"description": "Verify if a session is still valid and active."
+					},
+					"response": []
+				},
+				{
+					"name": "Logout",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"sessionId\": \"{{sessionId}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/logout",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"logout"
+							]
+						},
+						"description": "Logout user and end the active session."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Heartbeat",
+			"item": [
+				{
+					"name": "Send Heartbeat",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"sessionId\": \"{{sessionId}}\",\n  \"latitude\": 12.9716,\n  \"longitude\": 77.5946\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/heartbeat",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"heartbeat"
+							]
+						},
+						"description": "Send periodic heartbeat to keep session alive and track location.\n\nSend every 10 minutes to prevent auto-logout.\n\nReturns:\n- login_status: true if session is active, false if expired/invalid\n- sessionId: Current session ID\n- lastHeartbeat: Timestamp of this heartbeat"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Users",
+			"item": [
+				{
+					"name": "Create Admin User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"admin123\",\n  \"password\": \"SecurePass123!\",\n  \"displayName\": \"John Doe\",\n  \"companyId\": \"507f1f77bcf86cd799439011\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/users/create-admin",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"users",
+								"create-admin"
+							]
+						},
+						"description": "Create a new admin user.\n\n⚠️ MANDATORY FIELD:\n- companyId: Admin must be assigned to a specific company\n\nAuto-creates a virtual device for the admin.\n\nReturns:\n- user: Created user details\n- companyId: Assigned company ID\n- companyName: Company name\n- deviceId: Auto-created virtual device ID"
+					},
+					"response": []
+				},
+				{
+					"name": "Create User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"username\": \"employee001\",\n  \"password\": \"EmpPass123!\",\n  \"displayName\": \"Jane Smith\",\n  \"companyId\": \"507f1f77bcf86cd799439011\",\n  \"assignedDeviceId\": \"DEVICE-001\",\n  \"allocatedLocationId\": \"507f1f77bcf86cd799439012\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/users",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"users"
+							]
+						},
+						"description": "Create a new employee user with device and location assignment."
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Users",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/users",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"users"
+							]
+						},
+						"description": "Get all users in the system."
+					},
+					"response": []
+				},
+				{
+					"name": "Get User by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/users/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"users",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Get a specific user by their ID."
+					},
+					"response": []
+				},
+				{
+					"name": "Update User",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"displayName\": \"Jane Doe Smith\",\n  \"allocatedLocationId\": \"507f1f77bcf86cd799439013\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/users/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"users",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Update user details."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete User",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/users/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"users",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Delete a user from the system."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Companies",
+			"item": [
+				{
+					"name": "Create Company",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Acme Corporation\",\n  \"address\": \"123 Main Street, City\",\n  \"contactEmail\": \"contact@acme.com\",\n  \"contactPhone\": \"+91-9876543210\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/companies",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"companies"
+							]
+						},
+						"description": "Create a new company."
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Companies",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/companies",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"companies"
+							]
+						},
+						"description": "Get all registered companies."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Company by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/companies/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"companies",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Get a specific company by ID."
+					},
+					"response": []
+				},
+				{
+					"name": "Update Company",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Acme Corp Ltd\",\n  \"contactPhone\": \"+91-9876543211\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/companies/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"companies",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Update company details."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Company",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/companies/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"companies",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Delete a company."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Locations",
+			"item": [
+				{
+					"name": "Create Location",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Head Office\",\n  \"address\": \"456 Corporate Avenue, Bangalore\",\n  \"latitude\": 12.9716,\n  \"longitude\": 77.5946,\n  \"radius\": 100,\n  \"companyId\": \"507f1f77bcf86cd799439011\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/locations",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"locations"
+							]
+						},
+						"description": "Create a new location with geofencing.\n\nRadius is in meters (default: 100m)."
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Locations",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/locations",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"locations"
+							]
+						},
+						"description": "Get all locations in the system."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Location by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/locations/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"locations",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Get a specific location by ID."
+					},
+					"response": []
+				},
+				{
+					"name": "Update Location",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"locationId\": \"507f1f77bcf86cd799439011\",\n  \"name\": \"Head Office - Updated\",\n  \"address\": \"456 Corporate Avenue, Bangalore, KA 560001\",\n  \"latitude\": 12.9720,\n  \"longitude\": 77.5950,\n  \"radius\": 150\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/locations/update",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"locations",
+								"update"
+							]
+						},
+						"description": "Update an existing location's details.\n\n✅ All fields are optional except locationId\n✅ Validates latitude (-90 to 90) and longitude (-180 to 180)\n✅ Radius must be >= 0"
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Location",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/locations/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"locations",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Delete a location."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Devices",
+			"item": [
+				{
+					"name": "Register Device",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"deviceId\": \"DEVICE-001\",\n  \"serial\": \"SN123456789\",\n  \"name\": \"Samsung Galaxy S21\",\n  \"companyId\": \"507f1f77bcf86cd799439011\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/device/register",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"device",
+								"register"
+							]
+						},
+						"description": "Register a new device for attendance tracking."
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Devices",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/device",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"device"
+							]
+						},
+						"description": "Get all devices in the system.\n\n✅ Shows all devices if no companyId provided\n✅ Admin devices marked with isAdminDevice flag\n✅ ADMIN-GLOBAL devices show as \"Admin Device\""
+					},
+					"response": []
+				},
+				{
+					"name": "Get Devices by Company",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/device?companyId=507f1f77bcf86cd799439011",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"device"
+							],
+							"query": [
+								{
+									"key": "companyId",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Get all devices for a specific company."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Device",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/device/:deviceId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"device",
+								":deviceId"
+							],
+							"variable": [
+								{
+									"key": "deviceId",
+									"value": "DEVICE-001"
+								}
+							]
+						},
+						"description": "Delete a device from the system."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Sessions",
+			"item": [
+				{
+					"name": "Get All Sessions (Recent)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/sessions",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"sessions"
+							]
+						},
+						"description": "Get sessions from the last 30 days by default.\n\nShows active sessions + recently expired ones.\n\nUse showAll=true to get full history."
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Sessions (Full History)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/sessions?showAll=true",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"sessions"
+							],
+							"query": [
+								{
+									"key": "showAll",
+									"value": "true"
+								}
+							]
+						},
+						"description": "Get all sessions regardless of date (full history)."
+					},
+					"response": []
+				},
+				{
+					"name": "Get User Sessions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/sessions/user/:userId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"sessions",
+								"user",
+								":userId"
+							],
+							"variable": [
+								{
+									"key": "userId",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Get all sessions for a specific user.\n\nDefault: Last 30 days\nUse ?showAll=true for full history"
+					},
+					"response": []
+				},
+				{
+					"name": "Export Sessions CSV",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/sessions/export/csv?companyId=507f1f77bcf86cd799439011",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"sessions",
+								"export",
+								"csv"
+							],
+							"query": [
+								{
+									"key": "companyId",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Export sessions as CSV file.\n\n⚠️ Maximum 1 year (365 days) of data\n🕒 All times in IST (Indian Standard Time)\n\nOptional filters:\n- companyId\n- startDate (YYYY-MM-DD)\n- endDate (YYYY-MM-DD)"
+					},
+					"response": []
+				},
+				{
+					"name": "Export Sessions CSV (Date Range)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/sessions/export/csv?startDate=2025-10-01&endDate=2025-10-20",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"sessions",
+								"export",
+								"csv"
+							],
+							"query": [
+								{
+									"key": "startDate",
+									"value": "2025-10-01"
+								},
+								{
+									"key": "endDate",
+									"value": "2025-10-20"
+								}
+							]
+						},
+						"description": "Export sessions for a specific date range.\n\n⚠️ Maximum 1 year range allowed\n\nFormat: YYYY-MM-DD"
+					},
+					"response": []
+				},
+				{
+					"name": "Get User Work Report (Today)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/sessions/user/:userId/work-report?range=today",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"sessions",
+								"user",
+								":userId",
+								"work-report"
+							],
+							"query": [
+								{
+									"key": "range",
+									"value": "today"
+								}
+							],
+							"variable": [
+								{
+									"key": "userId",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Get work report for a user.\n\n🕒 All times in IST timezone\n\nSupported ranges:\n- today\n- week (current week)\n- month (current month)\n- year (current year)\n- custom (with startDate & endDate)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get User Work Report (Custom Range)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/sessions/user/:userId/work-report?range=custom&startDate=2025-10-01&endDate=2025-10-20",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"sessions",
+								"user",
+								":userId",
+								"work-report"
+							],
+							"query": [
+								{
+									"key": "range",
+									"value": "custom"
+								},
+								{
+									"key": "startDate",
+									"value": "2025-10-01"
+								},
+								{
+									"key": "endDate",
+									"value": "2025-10-20"
+								}
+							],
+							"variable": [
+								{
+									"key": "userId",
+									"value": "507f1f77bcf86cd799439011"
+								}
+							]
+						},
+						"description": "Get work report for custom date range.\n\n⚠️ Maximum 1 year range\n\nFormat: YYYY-MM-DD"
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "https://bamsserver.vercel.app",
+			"type": "string"
+		},
+		{
+			"key": "sessionId",
+			"value": "",
+			"type": "string"
+		}
+	]
+}

@@ -98,6 +98,7 @@ export class SessionsController {
     @Query('to') to?: string,
     @Query('skip') skip?: string,
     @Query('limit') limit?: string,
+    @Query('showAll') showAll?: string, // For admin/debugging purposes
   ) {
     try {
       const filter: any = {};
@@ -105,10 +106,26 @@ export class SessionsController {
       if (companyId) filter.companyId = companyId;
       if (userId) filter.userId = userId;
       
+      // By default, only show active and recent sessions (last 30 days)
+      // unless date range is explicitly provided or showAll=true
+      const isShowAll = showAll === 'true';
+      
       if (from || to) {
         filter.loginAt = {};
         if (from) filter.loginAt.$gte = new Date(from);
         if (to) filter.loginAt.$lte = new Date(to);
+      } else if (!isShowAll) {
+        // Default: show only active sessions or sessions from last 30 days
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        
+        filter.$or = [
+          { status: 'active' }, // All active sessions
+          { 
+            loginAt: { $gte: thirtyDaysAgo }, // Recent sessions (last 30 days)
+            status: { $in: ['logged_out', 'expired', 'heartbeat_timeout', 'auto_logged_out'] }
+          }
+        ];
       }
 
       // Pagination
@@ -195,13 +212,72 @@ export class SessionsController {
       
       if (companyId) filter.companyId = companyId;
       
-      if (from || to) {
-        filter.loginAt = {};
-        if (from) filter.loginAt.$gte = new Date(from);
-        if (to) filter.loginAt.$lte = new Date(to);
+      // Date range validation - max 1 year
+      let fromDate: Date;
+      let toDate: Date;
+      
+      if (from && to) {
+        fromDate = new Date(from);
+        toDate = new Date(to);
+        
+        // Validate date range
+        const diffMs = toDate.getTime() - fromDate.getTime();
+        const diffDays = diffMs / (1000 * 60 * 60 * 24);
+        
+        if (diffDays > 365) {
+          throw new HttpException({
+            message: 'Export date range cannot exceed 1 year (365 days). Please select a smaller date range.',
+            error: 'DATE_RANGE_TOO_LARGE',
+            maxDays: 365,
+            requestedDays: Math.floor(diffDays)
+          }, HttpStatus.BAD_REQUEST);
+        }
+        
+        filter.loginAt = {
+          $gte: fromDate,
+          $lte: toDate
+        };
+      } else if (from) {
+        // Only 'from' provided - export up to 1 year from that date
+        fromDate = new Date(from);
+        toDate = new Date(fromDate);
+        toDate.setFullYear(toDate.getFullYear() + 1);
+        
+        filter.loginAt = {
+          $gte: fromDate,
+          $lte: toDate
+        };
+      } else if (to) {
+        // Only 'to' provided - export up to 1 year before that date
+        toDate = new Date(to);
+        fromDate = new Date(toDate);
+        fromDate.setFullYear(fromDate.getFullYear() - 1);
+        
+        filter.loginAt = {
+          $gte: fromDate,
+          $lte: toDate
+        };
+      } else {
+        // No dates provided - default to last 30 days
+        toDate = new Date();
+        fromDate = new Date();
+        fromDate.setDate(fromDate.getDate() - 30);
+        
+        filter.loginAt = {
+          $gte: fromDate,
+          $lte: toDate
+        };
       }
 
-      const sessions = await this.sessionModel.find(filter).sort({ loginAt: -1 });
+      const sessions = await this.sessionModel.find(filter).sort({ loginAt: -1 }).limit(10000); // Hard limit for safety
+      
+      if (sessions.length === 0) {
+        throw new HttpException({
+          message: 'No sessions found for the specified date range.',
+          error: 'NO_SESSIONS_FOUND',
+          dateRange: { from: fromDate, to: toDate }
+        }, HttpStatus.NOT_FOUND);
+      }
 
       // Get user details
       const userIds = [...new Set(sessions.map(s => s.userId))];
@@ -282,6 +358,7 @@ export class SessionsController {
    * GET /api/user-work-report?userId=...&type=daily|weekly|monthly|yearly
    * Returns work hours and session details for the specified user and period
    * All dates are in IST (Indian Standard Time, UTC+5:30)
+   * Limited to maximum 1 year for yearly reports
    */
   @Get('user-work-report')
   async getUserWorkReport(
@@ -290,7 +367,10 @@ export class SessionsController {
     @Query('date') date?: string // Optional, defaults to today (IST)
   ) {
     if (!userId) {
-      throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
+      throw new HttpException({
+        message: 'User ID is required to fetch work report.',
+        error: 'USER_ID_REQUIRED'
+      }, HttpStatus.BAD_REQUEST);
     }
     
     // Parse date in IST context
@@ -309,9 +389,23 @@ export class SessionsController {
         break;
       case 'yearly':
         ({ from, to } = this.getISTYearRange(now));
+        // Validate yearly doesn't exceed 1 year
+        const diffMs = to.getTime() - from.getTime();
+        const diffDays = diffMs / (1000 * 60 * 60 * 24);
+        if (diffDays > 366) {
+          throw new HttpException({
+            message: 'Yearly reports are limited to maximum 366 days. Please use a more recent date.',
+            error: 'DATE_RANGE_TOO_LARGE',
+            maxDays: 366
+          }, HttpStatus.BAD_REQUEST);
+        }
         break;
       default:
-        throw new HttpException('Invalid type', HttpStatus.BAD_REQUEST);
+        throw new HttpException({
+          message: 'Invalid report type. Must be one of: daily, weekly, monthly, yearly.',
+          error: 'INVALID_REPORT_TYPE',
+          allowedTypes: ['daily', 'weekly', 'monthly', 'yearly']
+        }, HttpStatus.BAD_REQUEST);
     }
     
     // Query sessions for user in date range (stored as UTC in DB)
@@ -340,10 +434,18 @@ export class SessionsController {
     // Get user info
     const user = await this.userModel.findById(userId);
     
+    if (!user) {
+      throw new HttpException({
+        message: 'User not found. The user may have been deleted.',
+        error: 'USER_NOT_FOUND',
+        userId
+      }, HttpStatus.NOT_FOUND);
+    }
+    
     return {
       ok: true,
       timezone: 'IST (UTC+5:30)',
-      user: user ? { userId: user._id, username: user.username, displayName: user.displayName } : null,
+      user: { userId: user._id, username: user.username, displayName: user.displayName },
       type,
       from: this.formatISTDate(from),
       to: this.formatISTDate(to),
@@ -358,6 +460,7 @@ export class SessionsController {
    * Export user-specific work report as CSV
    * GET /api/user-work-report/export?userId=...&type=daily|weekly|monthly|yearly&date=...
    * All dates and times are in IST (Indian Standard Time, UTC+5:30)
+   * Limited to maximum 1 year date range
    */
   @Get('user-work-report/export')
   async exportUserWorkReport(
@@ -367,7 +470,10 @@ export class SessionsController {
     @Res() res?: Response,
   ) {
     if (!userId) {
-      throw new HttpException('userId is required', HttpStatus.BAD_REQUEST);
+      throw new HttpException({
+        message: 'User ID is required to generate work report.',
+        error: 'USER_ID_REQUIRED'
+      }, HttpStatus.BAD_REQUEST);
     }
 
     try {
@@ -387,9 +493,23 @@ export class SessionsController {
           break;
         case 'yearly':
           ({ from, to } = this.getISTYearRange(now));
+          // Validate yearly doesn't exceed 1 year
+          const diffMs = to.getTime() - from.getTime();
+          const diffDays = diffMs / (1000 * 60 * 60 * 24);
+          if (diffDays > 366) {
+            throw new HttpException({
+              message: 'Yearly reports are limited to maximum 366 days. Please use a more recent date.',
+              error: 'DATE_RANGE_TOO_LARGE',
+              maxDays: 366
+            }, HttpStatus.BAD_REQUEST);
+          }
           break;
         default:
-          throw new HttpException('Invalid type', HttpStatus.BAD_REQUEST);
+          throw new HttpException({
+            message: 'Invalid report type. Must be one of: daily, weekly, monthly, yearly.',
+            error: 'INVALID_REPORT_TYPE',
+            allowedTypes: ['daily', 'weekly', 'monthly', 'yearly']
+          }, HttpStatus.BAD_REQUEST);
       }
 
       // Query sessions for user in date range (stored as UTC in DB)
@@ -401,7 +521,11 @@ export class SessionsController {
       // Get user info
       const user = await this.userModel.findById(userId);
       if (!user) {
-        throw new HttpException('User not found', HttpStatus.NOT_FOUND);
+        throw new HttpException({
+          message: 'User not found. The user may have been deleted.',
+          error: 'USER_NOT_FOUND',
+          userId
+        }, HttpStatus.NOT_FOUND);
       }
 
       // Calculate total work hours and prepare session data

@@ -35,7 +35,10 @@ export class AuthController {
       
       if (!user) {
         console.log('User not found');
-        throw new HttpException('Invalid credentials', HttpStatus.UNAUTHORIZED);
+        throw new HttpException({
+          message: 'Invalid username or password. Please check your credentials and try again.',
+          error: 'INVALID_CREDENTIALS'
+        }, HttpStatus.UNAUTHORIZED);
       }
 
       // Verify password using bcrypt
@@ -44,7 +47,10 @@ export class AuthController {
       
       if (!isPasswordValid) {
         console.log('Invalid password');
-        throw new HttpException('Invalid credentials', HttpStatus.UNAUTHORIZED);
+        throw new HttpException({
+          message: 'Invalid username or password. Please check your credentials and try again.',
+          error: 'INVALID_CREDENTIALS'
+        }, HttpStatus.UNAUTHORIZED);
       }
 
       console.log('User company:', user.companyId, 'Device requested:', loginDto.deviceId, 'User role:', user.role);
@@ -57,13 +63,21 @@ export class AuthController {
         // Employee users must have assigned device
         if (user.assignedDeviceId && user.assignedDeviceId !== loginDto.deviceId) {
           console.log('Device not assigned - user device:', user.assignedDeviceId, 'requested device:', loginDto.deviceId);
-          return { ok: false, error: 'NOT_ASSIGNED' };
+          throw new HttpException({
+            message: 'You are not authorized to login from this device. Please use your assigned device or contact your administrator.',
+            error: 'DEVICE_NOT_ASSIGNED',
+            assignedDeviceId: user.assignedDeviceId,
+            requestedDeviceId: loginDto.deviceId
+          }, HttpStatus.FORBIDDEN);
         }
 
         // If device is unassigned, employee cannot login
         if (!user.assignedDeviceId) {
           console.log('Device unassigned and user is employee');
-          return { ok: false, error: 'NOT_ASSIGNED' };
+          throw new HttpException({
+            message: 'No device has been assigned to your account. Please contact your administrator to assign a device.',
+            error: 'NO_DEVICE_ASSIGNED'
+          }, HttpStatus.FORBIDDEN);
         }
       }
 
@@ -85,7 +99,11 @@ export class AuthController {
           
           if (!allocatedLocation) {
             console.log('Allocated location not found:', user.allocatedLocationId);
-            return { ok: false, error: 'ALLOCATED_LOCATION_NOT_FOUND' };
+            throw new HttpException({
+              message: 'Your allocated location could not be found. Please contact your administrator.',
+              error: 'ALLOCATED_LOCATION_NOT_FOUND',
+              allocatedLocationId: user.allocatedLocationId
+            }, HttpStatus.INTERNAL_SERVER_ERROR);
           }
           
           // Get proximity setting from config (default 100m)
@@ -99,7 +117,16 @@ export class AuthController {
           // Check if user is within 100m of their allocated location
           if (!isWithinAllocatedLocation(userLocation, allocatedLocation, proximityMeters)) {
             console.log('Employee not within allocated location proximity');
-            return { ok: false, error: 'NOT_WITHIN_ALLOCATED_LOCATION' };
+            throw new HttpException({
+              message: `You must be within ${proximityMeters} meters of ${allocatedLocation.name} to login. Please move closer to your assigned location.`,
+              error: 'NOT_WITHIN_ALLOCATED_LOCATION',
+              allocatedLocation: {
+                name: allocatedLocation.name,
+                lat: allocatedLocation.coords.coordinates[1],
+                lon: allocatedLocation.coords.coordinates[0]
+              },
+              requiredProximityMeters: proximityMeters
+            }, HttpStatus.FORBIDDEN);
           }
           
           console.log('Employee within allocated location proximity - access granted');
@@ -112,7 +139,11 @@ export class AuthController {
           
           if (allowedLocations.length === 0) {
             console.log('No locations configured for company:', user.companyId);
-            return { ok: false, error: 'NO_LOCATIONS_CONFIGURED' };
+            throw new HttpException({
+              message: 'No locations are configured for your company. Please contact your administrator to set up allowed locations.',
+              error: 'NO_LOCATIONS_CONFIGURED',
+              companyId: user.companyId
+            }, HttpStatus.FORBIDDEN);
           }
 
           console.log('Allowed general locations:', allowedLocations.map(loc => ({ 
@@ -123,57 +154,65 @@ export class AuthController {
           
           if (!isWithinAllowedLocation(userLocation, allowedLocations)) {
             console.log('Employee not within any allowed general location');
-            return { ok: false, error: 'LOCATION_NOT_ALLOWED' };
+            throw new HttpException({
+              message: 'You are not within any allowed location. Please move to one of your company\'s registered locations to login.',
+              error: 'LOCATION_NOT_ALLOWED',
+              allowedLocations: allowedLocations.map(loc => ({
+                name: loc.name,
+                lat: loc.coords.coordinates[1],
+                lon: loc.coords.coordinates[0],
+                radiusMeters: loc.radiusMeters
+              }))
+            }, HttpStatus.FORBIDDEN);
           }
           
           console.log('Employee within general company location - access granted');
         }
       }
 
-      console.log('Location check passed, creating session');
+      console.log('Location check passed, checking existing sessions');
 
-      // Use atomic operation to ensure no race conditions
+      // Check for existing active sessions (employees only)
       const currentTime = new Date();
+      const heartbeatTimeoutMinutes = this.configService.get<number>('heartbeatIntervalMinutes') || 5;
+      const heartbeatTimeoutMs = heartbeatTimeoutMinutes * 60 * 1000;
       
-      // First, forcefully logout ALL existing active sessions for this user
-      // This is more aggressive and handles race conditions better
-      const logoutResult = await this.sessionModel.updateMany(
-        { 
+      if (user.role !== 'admin') {
+        // Find any active sessions for this user
+        const existingActiveSession = await this.sessionModel.findOne({
           userId: user._id,
           status: 'active'
-        },
-        { 
-          logoutAt: currentTime,
-          status: 'auto_logged_out'
-        }
-      );
+        });
 
-      if (logoutResult.modifiedCount > 0) {
-        console.log(`Forcefully logged out ${logoutResult.modifiedCount} existing active sessions for user ${user.username}`);
-      }
-
-      // Wait a small moment to ensure the update is completed
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // Verify no active sessions exist (double-check for race conditions)
-      const remainingActiveSessions = await this.sessionModel.countDocuments({
-        userId: user._id,
-        status: 'active'
-      });
-
-      if (remainingActiveSessions > 0) {
-        console.error(`WARNING: Found ${remainingActiveSessions} active sessions after logout attempt for user ${user.username}`);
-        // Force another cleanup
-        await this.sessionModel.updateMany(
-          { 
-            userId: user._id,
-            status: 'active'
-          },
-          { 
-            logoutAt: currentTime,
-            status: 'auto_logged_out'
+        if (existingActiveSession) {
+          // Check if heartbeat is still valid (within timeout window)
+          const timeSinceLastHeartbeat = currentTime.getTime() - existingActiveSession.lastHeartbeat.getTime();
+          
+          if (timeSinceLastHeartbeat < heartbeatTimeoutMs) {
+            // Session is still active with valid heartbeat - reject login
+            console.log(`User ${user.username} has active session with valid heartbeat. Rejecting login.`);
+            throw new HttpException({
+              message: 'You already have an active session. Please logout from your other device first or wait for the session to expire.',
+              error: 'ACTIVE_SESSION_EXISTS',
+              sessionId: existingActiveSession._id,
+              deviceId: existingActiveSession.deviceId,
+              loginAt: existingActiveSession.loginAt,
+              lastHeartbeat: existingActiveSession.lastHeartbeat
+            }, HttpStatus.CONFLICT);
+          } else {
+            // Heartbeat has timed out - auto-logout the stale session
+            console.log(`User ${user.username} has stale session (no heartbeat for ${Math.floor(timeSinceLastHeartbeat / 1000)}s). Auto-logging out.`);
+            await this.sessionModel.updateOne(
+              { _id: existingActiveSession._id },
+              { 
+                logoutAt: currentTime,
+                status: 'heartbeat_timeout'
+              }
+            );
           }
-        );
+        }
+      } else {
+        console.log('Admin user - skipping active session restriction');
       }
 
       // Create new session
@@ -201,16 +240,20 @@ export class AuthController {
       const sessionId = String(session._id);
       console.log('Session created successfully:', sessionId);
 
-      // Final verification: ensure user has only one active session
-      const finalActiveCount = await this.sessionModel.countDocuments({
-        userId: user._id,
-        status: 'active'
-      });
+      // Final verification: ensure user has only one active session (employees only)
+      if (user.role !== 'admin') {
+        const finalActiveCount = await this.sessionModel.countDocuments({
+          userId: user._id,
+          status: 'active'
+        });
 
-      if (finalActiveCount !== 1) {
-        console.error(`CRITICAL: User ${user.username} has ${finalActiveCount} active sessions after login!`);
+        if (finalActiveCount !== 1) {
+          console.error(`CRITICAL: User ${user.username} has ${finalActiveCount} active sessions after login!`);
+        } else {
+          console.log(`SUCCESS: User ${user.username} has exactly 1 active session`);
+        }
       } else {
-        console.log(`SUCCESS: User ${user.username} has exactly 1 active session`);
+        console.log('Admin user - skipping post-login single active session check');
       }
 
       // Update device lastSeen
@@ -224,7 +267,9 @@ export class AuthController {
       return {
         ok: true,
         sessionId: sessionId,
-        expiresIn: sessionTimeoutHours * 3600 // in seconds
+        expiresIn: sessionTimeoutHours * 3600, // in seconds
+        companyId: user.companyId || null, // Include companyId for frontend routing
+        role: user.role // Include role for authorization
       };
     } catch (error) {
       console.error('Login error:', error);

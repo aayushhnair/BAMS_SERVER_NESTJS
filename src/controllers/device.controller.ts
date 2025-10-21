@@ -65,31 +65,52 @@ export class DeviceController {
       if (devices.length === 0) {
         return {
           ok: true,
-          devices: []
+          count: 0,
+          devices: [],
+          message: 'No devices found'
         };
       }
       
-      // Get company names for each device
-      const companyIds = [...new Set(devices.map(d => d.companyId))];
-      const companies = await this.companyModel.find({ _id: { $in: companyIds } });
-      const companyMap = new Map(companies.map(c => [String(c._id), c.name]));
+      // Get company names for each device (filter out invalid/admin company IDs)
+      const companyIds = [...new Set(devices.map(d => d.companyId))]
+        .filter(id => id && id !== 'ADMIN-GLOBAL' && id.length === 24); // Valid MongoDB ObjectId is 24 chars
+      
+      let companyMap = new Map();
+      
+      if (companyIds.length > 0) {
+        try {
+          const companies = await this.companyModel.find({ _id: { $in: companyIds } });
+          companyMap = new Map(companies.map(c => [String(c._id), c.name]));
+        } catch (err) {
+          console.error('Error fetching company names:', err);
+          // Continue without company names if fetch fails
+        }
+      }
       
       return {
         ok: true,
+        count: devices.length,
         devices: devices.map(device => ({
           id: device._id,
           deviceId: device.deviceId,
           serial: device.serial,
           name: device.name,
           companyId: device.companyId,
-          companyName: companyMap.get(device.companyId) || 'Unknown',
+          companyName: device.companyId === 'ADMIN-GLOBAL' 
+            ? 'Admin Device' 
+            : (companyMap.get(device.companyId) || 'Unknown'),
           assignedTo: device.assignedTo || null,
-          lastSeen: device.lastSeen
+          lastSeen: device.lastSeen,
+          isAdminDevice: device.companyId === 'ADMIN-GLOBAL'
         }))
       };
     } catch (error) {
       console.error('Error fetching devices:', error);
-      throw new HttpException('Failed to fetch devices', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException({
+        message: 'Failed to fetch devices. Please try again.',
+        error: 'FETCH_DEVICES_FAILED',
+        details: error.message
+      }, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
