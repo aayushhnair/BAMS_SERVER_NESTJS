@@ -8,6 +8,9 @@ import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class AutoLogoutService {
   private readonly logger = new Logger(AutoLogoutService.name);
+  // Simple in-memory counters (process-local). For production, wire metrics to a metrics system.
+  private heartbeatTimeoutCount = 0;
+  private dailyAggregateCount = 0;
 
   constructor(
     @InjectModel(Session.name) private sessionModel: Model<SessionDocument>,
@@ -94,7 +97,8 @@ export class AutoLogoutService {
           { _id: { $in: ids } },
           { logoutAt: now, status: 'auto_logged_out' }
         );
-        // Log a few samples to help triage which users/devices are affected
+        // Increment counter and log a few samples to help triage which users/devices are affected
+        this.heartbeatTimeoutCount += sessionsToLogout.length;
         const samples = sessionsToLogout.slice(0, 5).map(s => ({ sessionId: String(s._id), userId: s.userId, deviceId: s.deviceId }));
         this.logger.warn(`Heartbeat task: auto-logged out ${sessionsToLogout.length} sessions due to missing heartbeats`, { count: sessionsToLogout.length, samples });
       } else {
@@ -117,38 +121,58 @@ export class AutoLogoutService {
     try {
       const sessionTimeoutHours = this.configService.get<number>('sessionTimeoutHours') || 12;
       const now = new Date();
+      // Bulk update approach: fetch active sessions and prepare bulk operations in batches
+      const activeSessions = await this.sessionModel.find({ status: 'active' }).select('loginAt lastHeartbeat');
+      if (activeSessions.length === 0) {
+        this.logger.debug('Daily aggregation: no active sessions to close');
+        return 0;
+      }
 
-      // Find active sessions that started today or earlier and still active
-      const sessions = await this.sessionModel.find({ status: 'active' });
-      const updatedIds: any[] = [];
-
-      for (const session of sessions) {
-        // Compute max allowed logout time based on session timeout
-        const maxLogout = new Date(session.loginAt.getTime() + sessionTimeoutHours * 60 * 60 * 1000);
-
-        // Use lastHeartbeat if available, otherwise fallback to loginAt
-        const lastHb = session.lastHeartbeat || session.loginAt;
-
-        // Choose the earlier of lastHeartbeat and maxLogout
+      const bulkOps = activeSessions.map(s => {
+        const maxLogout = new Date(s.loginAt.getTime() + sessionTimeoutHours * 60 * 60 * 1000);
+        const lastHb = s.lastHeartbeat || s.loginAt;
         const logoutTime = lastHb.getTime() < maxLogout.getTime() ? lastHb : maxLogout;
-
-        // Ensure we don't set logout in the future
         const finalLogout = logoutTime.getTime() > now.getTime() ? now : logoutTime;
 
-        await this.sessionModel.updateOne({ _id: session._id }, { logoutAt: finalLogout, status: 'auto_logged_out' });
-        updatedIds.push(session._id);
+        // Compute worked seconds as difference between loginAt and finalLogout
+        const workedSeconds = Math.max(0, Math.floor((finalLogout.getTime() - s.loginAt.getTime()) / 1000));
+
+        return {
+          updateOne: {
+            filter: { _id: s._id },
+            update: { $set: { logoutAt: finalLogout, status: 'auto_logged_out', workedSeconds } }
+          }
+        };
+      });
+
+      // Execute bulk in batches of 500
+      const batchSize = 500;
+      let updatedCount = 0;
+      for (let i = 0; i < bulkOps.length; i += batchSize) {
+        const batch = bulkOps.slice(i, i + batchSize);
+        const res = await this.sessionModel.bulkWrite(batch);
+        updatedCount += res.modifiedCount || 0;
       }
 
-      if (updatedIds.length > 0) {
-        this.logger.log(`Daily aggregation: closed ${updatedIds.length} active sessions`);
+      if (updatedCount > 0) {
+        this.dailyAggregateCount += updatedCount;
+        this.logger.log(`Daily aggregation: closed ${updatedCount} active sessions`);
       } else {
-        this.logger.debug('Daily aggregation: no active sessions to close');
+        this.logger.debug('Daily aggregation: no active sessions were closed by bulk update');
       }
 
-      return updatedIds.length;
+      return updatedCount;
     } catch (error) {
       this.logger.error('Failed to perform daily aggregation', error);
       throw error;
     }
+  }
+
+  // Expose counters for metrics (process-local)
+  getMetrics() {
+    return {
+      heartbeatTimeoutCount: this.heartbeatTimeoutCount,
+      dailyAggregateCount: this.dailyAggregateCount
+    };
   }
 }

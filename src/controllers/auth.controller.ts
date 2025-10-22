@@ -1,4 +1,5 @@
 import { Controller, Post, Body, HttpException, HttpStatus } from '@nestjs/common';
+import mongoose from 'mongoose';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument } from '../schemas/user.schema';
@@ -193,88 +194,77 @@ export class AuthController {
         console.log('Location validation skipped for this login request (location_Status=false or user setting)');
       }
 
-      console.log('Location check passed, checking existing sessions');
+      console.log('Location check passed, proceeding with atomic session creation');
 
-      // Check for existing active sessions (employees only)
-      const currentTime = new Date();
-  const heartbeatTimeoutMinutes = this.configService.get<number>('heartbeatMinutes') || 5;
-  const heartbeatGraceFactor = this.configService.get<number>('heartbeatGraceFactor') || 2;
-  const heartbeatTimeoutMs = heartbeatTimeoutMinutes * heartbeatGraceFactor * 60 * 1000;
-      
-      if (user.role !== 'admin') {
-        // Find any active sessions for this user
-        const existingActiveSession = await this.sessionModel.findOne({
-          userId: user._id,
-          status: 'active'
-        });
+      // Use a transaction to atomically handle existing active sessions and create the new session
+      const mongoSession = await mongoose.startSession();
+  let sessionId: string = '';
+      try {
+        await mongoSession.withTransaction(async () => {
+          const currentTime = new Date();
+          const heartbeatTimeoutMinutes = this.configService.get<number>('heartbeatMinutes') || 5;
+          const heartbeatGraceFactor = this.configService.get<number>('heartbeatGraceFactor') || 2;
+          const heartbeatTimeoutMs = heartbeatTimeoutMinutes * heartbeatGraceFactor * 60 * 1000;
 
-        if (existingActiveSession) {
-          // Defensive: if lastHeartbeat is missing, treat session as stale
-          const lastHb = existingActiveSession.lastHeartbeat;
-          if (!lastHb) {
-            console.log(`User ${user.username} has active session without lastHeartbeat, auto-logging out.`);
-            await this.sessionModel.updateOne(
-              { _id: existingActiveSession._id },
-              { 
-                logoutAt: currentTime,
-                status: 'heartbeat_timeout'
-              }
-            );
-          } else {
-            // Check if heartbeat is still valid (within timeout window)
-            const timeSinceLastHeartbeat = currentTime.getTime() - lastHb.getTime();
+          if (user.role !== 'admin') {
+            // Find any active sessions for this user inside the transaction
+            const existingActiveSession = await this.sessionModel.findOne({ userId: user._id, status: 'active' }).session(mongoSession);
 
-            if (timeSinceLastHeartbeat < heartbeatTimeoutMs) {
-              // Session is still active with valid heartbeat - reject login
-              console.log(`User ${user.username} has active session with valid heartbeat. Rejecting login.`);
-              throw new HttpException({
-                message: 'You already have an active session. Please logout from your other device first or wait for the session to expire.',
-                error: 'ACTIVE_SESSION_EXISTS',
-                sessionId: existingActiveSession._id,
-                deviceId: existingActiveSession.deviceId,
-                loginAt: existingActiveSession.loginAt,
-                lastHeartbeat: existingActiveSession.lastHeartbeat
-              }, HttpStatus.CONFLICT);
-            } else {
-              // Heartbeat has timed out - auto-logout the stale session
-              console.log(`User ${user.username} has stale session (no heartbeat for ${Math.floor(timeSinceLastHeartbeat / 1000)}s). Auto-logging out.`);
-              await this.sessionModel.updateOne(
-                { _id: existingActiveSession._id },
-                { 
-                  logoutAt: currentTime,
-                  status: 'heartbeat_timeout'
+            if (existingActiveSession) {
+              const lastHb = existingActiveSession.lastHeartbeat;
+              if (!lastHb) {
+                // Treat as stale and close it
+                await this.sessionModel.updateOne(
+                  { _id: existingActiveSession._id },
+                  { logoutAt: currentTime, status: 'heartbeat_timeout' },
+                  { session: mongoSession }
+                );
+              } else {
+                const timeSinceLastHeartbeat = currentTime.getTime() - lastHb.getTime();
+                if (timeSinceLastHeartbeat < heartbeatTimeoutMs) {
+                  // Session is still active - abort transaction and reject login
+                  throw new HttpException({
+                    message: 'You already have an active session. Please logout from your other device first or wait for the session to expire.',
+                    error: 'ACTIVE_SESSION_EXISTS',
+                    sessionId: existingActiveSession._id,
+                    deviceId: existingActiveSession.deviceId,
+                    loginAt: existingActiveSession.loginAt,
+                    lastHeartbeat: existingActiveSession.lastHeartbeat
+                  }, HttpStatus.CONFLICT);
+                } else {
+                  // Stale - close it
+                  await this.sessionModel.updateOne(
+                    { _id: existingActiveSession._id },
+                    { logoutAt: currentTime, status: 'heartbeat_timeout' },
+                    { session: mongoSession }
+                  );
                 }
-              );
+              }
             }
           }
-        }
-      } else {
-        console.log('Admin user - skipping active session restriction');
+
+          // Create new session inside transaction
+          const newSession = new this.sessionModel({
+            userId: user._id,
+            deviceId: loginDto.deviceId,
+            loginAt: currentTime,
+            loginLocation: {
+              type: 'Point',
+              coordinates: [loginDto.location.lon, loginDto.location.lat],
+              accuracy: loginDto.location.accuracy
+            },
+            status: 'active',
+            lastHeartbeat: currentTime,
+            companyId: user.companyId || undefined
+          });
+
+          await newSession.save({ session: mongoSession });
+          sessionId = String(newSession._id);
+        });
+      } finally {
+        mongoSession.endSession();
       }
 
-      // Create new session
-      const sessionData: any = {
-        userId: user._id,
-        deviceId: loginDto.deviceId,
-        loginAt: currentTime,
-        loginLocation: {
-          type: 'Point',
-          coordinates: [loginDto.location.lon, loginDto.location.lat],
-          accuracy: loginDto.location.accuracy
-        },
-        status: 'active',
-        lastHeartbeat: currentTime
-      };
-      
-      // Only add companyId if user has one (not for standalone admins)
-      if (user.companyId) {
-        sessionData.companyId = user.companyId;
-      }
-      
-      const session = new this.sessionModel(sessionData);
-
-      await session.save();
-      const sessionId = String(session._id);
       console.log('Session created successfully:', sessionId);
 
       // Final verification: ensure user has only one active session (employees only)

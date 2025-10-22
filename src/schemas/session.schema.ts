@@ -47,6 +47,10 @@ export class Session {
 
   @Prop({ default: () => new Date() })
   lastHeartbeat: Date;
+
+  @Prop({ default: 0 })
+  // Total worked duration in seconds for this session (computed during daily aggregation)
+  workedSeconds?: number;
 }
 
 export const SessionSchema = SchemaFactory.createForClass(Session);

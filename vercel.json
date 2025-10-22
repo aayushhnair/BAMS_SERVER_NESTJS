@@ -19,7 +19,7 @@
   "crons": [
     {
       "path": "/internal/cron/daily-aggregate",
-      "schedule": "0 21 * * *"
+      "schedule": "30 18 * * *"
     }
   ],
   "env": {
