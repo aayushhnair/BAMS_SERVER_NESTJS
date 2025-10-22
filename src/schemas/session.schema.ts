@@ -42,7 +42,7 @@ export class Session {
   @Prop()
   logoutAt?: Date;
 
-  @Prop({ required: true, enum: ['active', 'logged_out', 'auto_logged_out'], default: 'active' })
+  @Prop({ required: true, enum: ['active', 'logged_out', 'auto_logged_out', 'expired', 'heartbeat_timeout'], default: 'active' })
   status: string;
 
   @Prop({ default: () => new Date() })

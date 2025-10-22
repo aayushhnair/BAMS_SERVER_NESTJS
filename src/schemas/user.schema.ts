@@ -25,6 +25,12 @@ export class User {
 
   @Prop({ required: true, enum: ['employee', 'admin'], default: 'employee' })
   role: string;
+  
+  @Prop({ default: true })
+  // If true, location validation is required for this user by default.
+  // Admins are always exempted in code, but this flag allows toggling
+  // behaviour for employees via admin UI later on.
+  locationValidationRequired?: boolean;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

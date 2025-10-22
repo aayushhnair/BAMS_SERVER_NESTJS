@@ -11,6 +11,7 @@ import { isWithinAllowedLocation, isWithinAllocatedLocation } from '../utils/loc
 import { v4 as uuidv4 } from 'uuid';
 import { ConfigService } from '@nestjs/config';
 import { PasswordService } from '../services/password.service';
+import { MESSAGES } from '../constants/messages';
 
 @Controller('api/auth')
 export class AuthController {
@@ -82,10 +83,26 @@ export class AuthController {
       }
 
       // Role-based location validation
+      // Determine whether to perform location validation for this login.
+      // Priority: explicit request flag (loginDto.location.location_Status) -> user setting -> default true for employees
+      let doLocationValidation = false;
       if (user.role === 'admin') {
+        doLocationValidation = false;
         console.log('Admin user - skipping location validation');
-        // Admins can login from anywhere
       } else {
+        // If client explicitly provided a flag, respect it
+        const reqFlag = loginDto.location && (loginDto.location as any).location_Status;
+        if (reqFlag === true) {
+          doLocationValidation = true;
+        } else if (reqFlag === false) {
+          doLocationValidation = false;
+        } else {
+          // Fallback to user preference (if set) otherwise default to true for employees
+          doLocationValidation = user.locationValidationRequired !== false;
+        }
+      }
+
+      if (doLocationValidation) {
         // Employee users must validate location
         const userLocation = { lat: loginDto.location.lat, lon: loginDto.location.lon };
         console.log('Employee user location:', userLocation);
@@ -99,11 +116,12 @@ export class AuthController {
           
           if (!allocatedLocation) {
             console.log('Allocated location not found:', user.allocatedLocationId);
+            const msg = MESSAGES.LOCATION.ALLOCATED_LOCATION_NOT_FOUND;
             throw new HttpException({
-              message: 'Your allocated location could not be found. Please contact your administrator.',
-              error: 'ALLOCATED_LOCATION_NOT_FOUND',
+              message: msg.message,
+              error: msg.error,
               allocatedLocationId: user.allocatedLocationId
-            }, HttpStatus.INTERNAL_SERVER_ERROR);
+            }, msg.status);
           }
           
           // Get proximity setting from config (default 100m)
@@ -117,16 +135,17 @@ export class AuthController {
           // Check if user is within 100m of their allocated location
           if (!isWithinAllocatedLocation(userLocation, allocatedLocation, proximityMeters)) {
             console.log('Employee not within allocated location proximity');
+            const msg = MESSAGES.LOCATION.NOT_WITHIN_ALLOCATED_LOCATION(allocatedLocation.name, proximityMeters);
             throw new HttpException({
-              message: `You must be within ${proximityMeters} meters of ${allocatedLocation.name} to login. Please move closer to your assigned location.`,
-              error: 'NOT_WITHIN_ALLOCATED_LOCATION',
+              message: msg.message,
+              error: msg.error,
               allocatedLocation: {
                 name: allocatedLocation.name,
                 lat: allocatedLocation.coords.coordinates[1],
                 lon: allocatedLocation.coords.coordinates[0]
               },
               requiredProximityMeters: proximityMeters
-            }, HttpStatus.FORBIDDEN);
+            }, msg.status);
           }
           
           console.log('Employee within allocated location proximity - access granted');
@@ -139,11 +158,12 @@ export class AuthController {
           
           if (allowedLocations.length === 0) {
             console.log('No locations configured for company:', user.companyId);
+            const msg = MESSAGES.LOCATION.NO_LOCATIONS_CONFIGURED;
             throw new HttpException({
-              message: 'No locations are configured for your company. Please contact your administrator to set up allowed locations.',
-              error: 'NO_LOCATIONS_CONFIGURED',
+              message: msg.message,
+              error: msg.error,
               companyId: user.companyId
-            }, HttpStatus.FORBIDDEN);
+            }, msg.status);
           }
 
           console.log('Allowed general locations:', allowedLocations.map(loc => ({ 
@@ -154,28 +174,32 @@ export class AuthController {
           
           if (!isWithinAllowedLocation(userLocation, allowedLocations)) {
             console.log('Employee not within any allowed general location');
+            const msg = MESSAGES.LOCATION.LOCATION_NOT_ALLOWED;
             throw new HttpException({
-              message: 'You are not within any allowed location. Please move to one of your company\'s registered locations to login.',
-              error: 'LOCATION_NOT_ALLOWED',
+              message: msg.message,
+              error: msg.error,
               allowedLocations: allowedLocations.map(loc => ({
                 name: loc.name,
                 lat: loc.coords.coordinates[1],
                 lon: loc.coords.coordinates[0],
                 radiusMeters: loc.radiusMeters
               }))
-            }, HttpStatus.FORBIDDEN);
+            }, msg.status);
           }
           
           console.log('Employee within general company location - access granted');
         }
+      } else {
+        console.log('Location validation skipped for this login request (location_Status=false or user setting)');
       }
 
       console.log('Location check passed, checking existing sessions');
 
       // Check for existing active sessions (employees only)
       const currentTime = new Date();
-      const heartbeatTimeoutMinutes = this.configService.get<number>('heartbeatIntervalMinutes') || 5;
-      const heartbeatTimeoutMs = heartbeatTimeoutMinutes * 60 * 1000;
+  const heartbeatTimeoutMinutes = this.configService.get<number>('heartbeatMinutes') || 5;
+  const heartbeatGraceFactor = this.configService.get<number>('heartbeatGraceFactor') || 2;
+  const heartbeatTimeoutMs = heartbeatTimeoutMinutes * heartbeatGraceFactor * 60 * 1000;
       
       if (user.role !== 'admin') {
         // Find any active sessions for this user
@@ -185,23 +209,10 @@ export class AuthController {
         });
 
         if (existingActiveSession) {
-          // Check if heartbeat is still valid (within timeout window)
-          const timeSinceLastHeartbeat = currentTime.getTime() - existingActiveSession.lastHeartbeat.getTime();
-          
-          if (timeSinceLastHeartbeat < heartbeatTimeoutMs) {
-            // Session is still active with valid heartbeat - reject login
-            console.log(`User ${user.username} has active session with valid heartbeat. Rejecting login.`);
-            throw new HttpException({
-              message: 'You already have an active session. Please logout from your other device first or wait for the session to expire.',
-              error: 'ACTIVE_SESSION_EXISTS',
-              sessionId: existingActiveSession._id,
-              deviceId: existingActiveSession.deviceId,
-              loginAt: existingActiveSession.loginAt,
-              lastHeartbeat: existingActiveSession.lastHeartbeat
-            }, HttpStatus.CONFLICT);
-          } else {
-            // Heartbeat has timed out - auto-logout the stale session
-            console.log(`User ${user.username} has stale session (no heartbeat for ${Math.floor(timeSinceLastHeartbeat / 1000)}s). Auto-logging out.`);
+          // Defensive: if lastHeartbeat is missing, treat session as stale
+          const lastHb = existingActiveSession.lastHeartbeat;
+          if (!lastHb) {
+            console.log(`User ${user.username} has active session without lastHeartbeat, auto-logging out.`);
             await this.sessionModel.updateOne(
               { _id: existingActiveSession._id },
               { 
@@ -209,6 +220,32 @@ export class AuthController {
                 status: 'heartbeat_timeout'
               }
             );
+          } else {
+            // Check if heartbeat is still valid (within timeout window)
+            const timeSinceLastHeartbeat = currentTime.getTime() - lastHb.getTime();
+
+            if (timeSinceLastHeartbeat < heartbeatTimeoutMs) {
+              // Session is still active with valid heartbeat - reject login
+              console.log(`User ${user.username} has active session with valid heartbeat. Rejecting login.`);
+              throw new HttpException({
+                message: 'You already have an active session. Please logout from your other device first or wait for the session to expire.',
+                error: 'ACTIVE_SESSION_EXISTS',
+                sessionId: existingActiveSession._id,
+                deviceId: existingActiveSession.deviceId,
+                loginAt: existingActiveSession.loginAt,
+                lastHeartbeat: existingActiveSession.lastHeartbeat
+              }, HttpStatus.CONFLICT);
+            } else {
+              // Heartbeat has timed out - auto-logout the stale session
+              console.log(`User ${user.username} has stale session (no heartbeat for ${Math.floor(timeSinceLastHeartbeat / 1000)}s). Auto-logging out.`);
+              await this.sessionModel.updateOne(
+                { _id: existingActiveSession._id },
+                { 
+                  logoutAt: currentTime,
+                  status: 'heartbeat_timeout'
+                }
+              );
+            }
           }
         }
       } else {

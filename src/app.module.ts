@@ -24,6 +24,7 @@ import { SessionsController } from './controllers/sessions.controller';
 import { UsersController } from './controllers/users.controller';
 import { CompaniesController } from './controllers/companies.controller';
 import { AttendanceController } from './controllers/attendance.controller';
+import { InternalController } from './controllers/internal.controller';
 
 // Services
 import { AutoLogoutService } from './services/auto-logout.service';
@@ -71,7 +72,8 @@ import { AuthMiddleware } from './middleware/auth.middleware';
     SessionsController,
     UsersController,
     CompaniesController,
-    AttendanceController,
+      AttendanceController,
+      InternalController,
   ],
   providers: [
     AutoLogoutService,

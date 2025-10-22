@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, ValidateNested } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, ValidateNested, IsOptional } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class LocationDto {
@@ -10,6 +10,12 @@ export class LocationDto {
 
   @IsNumber()
   accuracy: number;
+
+  // Optional flag sent by client: if true, client requests location validation for this request
+  // If false, client explicitly opts out of server-side location validation.
+  // If omitted, server will fallback to user's `locationValidationRequired` setting.
+  @IsOptional()
+  location_Status?: boolean;
 
   @IsString()
   ts: string;

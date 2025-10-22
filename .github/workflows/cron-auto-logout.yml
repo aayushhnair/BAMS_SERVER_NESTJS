@@ -1,0 +1,29 @@
+name: Trigger Auto-Logout (fallback)
+
+on:
+  schedule:
+    - cron: '*/30 * * * *' # every 30 minutes
+  workflow_dispatch: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger internal cron endpoint
+        env:
+          DEPLOYMENT_URL: ${{ secrets.DEPLOYMENT_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$DEPLOYMENT_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "ERROR: DEPLOYMENT_URL and CRON_SECRET must be set as repository secrets.";
+            exit 1;
+          fi
+
+          echo "Calling $DEPLOYMENT_URL/internal/cron/auto-logout"
+          STATUS_CODE=$(curl -s -o /tmp/cron_response.json -w "%{http_code}" -X POST "$DEPLOYMENT_URL/internal/cron/auto-logout" -H "Authorization: Bearer $CRON_SECRET")
+          cat /tmp/cron_response.json || true
+          echo "Status: $STATUS_CODE"
+          if [ "$STATUS_CODE" -ge 400 ]; then
+            echo "Cron call failed with status $STATUS_CODE";
+            exit 1;
+          fi
