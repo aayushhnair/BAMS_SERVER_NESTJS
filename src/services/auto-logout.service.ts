@@ -118,34 +118,96 @@ export class AutoLogoutService {
       const sessionTimeoutHours = this.configService.get<number>('sessionTimeoutHours') || 12;
       const now = new Date();
 
-      // Find active sessions that started today or earlier and still active
+      // Find all active sessions
       const sessions = await this.sessionModel.find({ status: 'active' });
-      const updatedIds: any[] = [];
+
+      if (!sessions || sessions.length === 0) {
+        this.logger.debug('Daily aggregation: no active sessions to process');
+        return 0;
+      }
+
+      // Calculate midnight IST boundary (00:00 IST of current day) in UTC.
+      // IST is UTC+5:30, so midnight IST = (today at 00:00 IST) => UTC = today at 00:00 - 5.5 hours.
+      const nowUtc = new Date();
+      const istOffsetMinutes = 5 * 60 + 30; // 330 minutes
+
+      // Determine today's date in IST by shifting now by +330 minutes, then set to midnight, then shift back to UTC.
+      const asIst = new Date(nowUtc.getTime() + istOffsetMinutes * 60 * 1000);
+      const istMidnight = new Date(asIst.getFullYear(), asIst.getMonth(), asIst.getDate(), 0, 0, 0, 0);
+      const istMidnightUtc = new Date(istMidnight.getTime() - istOffsetMinutes * 60 * 1000);
+
+      const bulkOps: any[] = [];
+      let processedCount = 0;
 
       for (const session of sessions) {
-        // Compute max allowed logout time based on session timeout
+        // Compute cap based on loginAt + timeout, lastHeartbeat (or loginAt), and now.
         const maxLogout = new Date(session.loginAt.getTime() + sessionTimeoutHours * 60 * 60 * 1000);
-
-        // Use lastHeartbeat if available, otherwise fallback to loginAt
         const lastHb = session.lastHeartbeat || session.loginAt;
+        let chosenLogout = lastHb.getTime() < maxLogout.getTime() ? lastHb : maxLogout;
+        if (chosenLogout.getTime() > now.getTime()) chosenLogout = now;
 
-        // Choose the earlier of lastHeartbeat and maxLogout
-        const logoutTime = lastHb.getTime() < maxLogout.getTime() ? lastHb : maxLogout;
+        // If session.loginAt is before istMidnightUtc and chosenLogout is after istMidnightUtc, we need to split.
+        const loginAt = session.loginAt;
+        const logoutAt = chosenLogout;
 
-        // Ensure we don't set logout in the future
-        const finalLogout = logoutTime.getTime() > now.getTime() ? now : logoutTime;
+        if (loginAt.getTime() < istMidnightUtc.getTime() && logoutAt.getTime() > istMidnightUtc.getTime()) {
+          // Close the first part at midnight IST (UTC time)
+          const firstPartLogout = new Date(istMidnightUtc);
+          // workedSeconds for first part: difference between firstPartLogout and loginAt, floored to seconds
+          const workedSecondsFirst = Math.max(0, Math.floor((firstPartLogout.getTime() - loginAt.getTime()) / 1000));
 
-        await this.sessionModel.updateOne({ _id: session._id }, { logoutAt: finalLogout, status: 'auto_logged_out' });
-        updatedIds.push(session._id);
+          bulkOps.push({
+            updateOne: {
+              filter: { _id: session._id },
+              update: { logoutAt: firstPartLogout, status: 'auto_logged_out', workedSeconds: workedSecondsFirst }
+            }
+          });
+
+          // For the remaining part, create a new session starting at midnight IST (loginAt = istMidnightUtc)
+          // The remaining portion may also be immediately capped by logoutAt (if logoutAt <= now but > midnight)
+          const remainingLogin = new Date(istMidnightUtc);
+          // remaining logout is original logoutAt (capped already to now and session timeout)
+          const remainingLogout = logoutAt;
+
+          // If remainingLogout <= remainingLogin then the remainder has no duration; still create record with zero workedSeconds but mark as auto_logged_out.
+          const workedSecondsRemaining = Math.max(0, Math.floor((remainingLogout.getTime() - remainingLogin.getTime()) / 1000));
+
+          const newSessionDoc: any = {
+            companyId: session.companyId,
+            userId: session.userId,
+            deviceId: session.deviceId,
+            loginAt: remainingLogin,
+            loginLocation: session.loginLocation,
+            lastHeartbeat: session.lastHeartbeat && session.lastHeartbeat.getTime() > remainingLogin.getTime() ? session.lastHeartbeat : remainingLogin,
+            logoutAt: remainingLogout,
+            status: 'auto_logged_out',
+            workedSeconds: workedSecondsRemaining
+          };
+
+          bulkOps.push({ insertOne: { document: newSessionDoc } });
+          processedCount += 1;
+        } else {
+          // No split required; just close this session at logoutAt and set workedSeconds accordingly.
+          const workedSeconds = Math.max(0, Math.floor((logoutAt.getTime() - loginAt.getTime()) / 1000));
+          bulkOps.push({
+            updateOne: {
+              filter: { _id: session._id },
+              update: { logoutAt: logoutAt, status: 'auto_logged_out', workedSeconds }
+            }
+          });
+          processedCount += 1;
+        }
       }
 
-      if (updatedIds.length > 0) {
-        this.logger.log(`Daily aggregation: closed ${updatedIds.length} active sessions`);
-      } else {
-        this.logger.debug('Daily aggregation: no active sessions to close');
+      // Execute bulk operations in reasonable chunks to avoid large payloads.
+      const chunkSize = 500;
+      for (let i = 0; i < bulkOps.length; i += chunkSize) {
+        const chunk = bulkOps.slice(i, i + chunkSize);
+        await this.sessionModel.bulkWrite(chunk, { ordered: false });
       }
 
-      return updatedIds.length;
+  this.logger.log(`Daily aggregation: processed ${processedCount} active sessions (split where necessary)`);
+  return processedCount;
     } catch (error) {
       this.logger.error('Failed to perform daily aggregation', error);
       throw error;

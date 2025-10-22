@@ -47,6 +47,10 @@ export class Session {
 
   @Prop({ default: () => new Date() })
   lastHeartbeat: Date;
+
+  @Prop({ required: false })
+  // workedSeconds stores number of seconds counted as "worked" for this session record.
+  workedSeconds?: number;
 }
 
 export const SessionSchema = SchemaFactory.createForClass(Session);

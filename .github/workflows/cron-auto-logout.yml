@@ -2,7 +2,8 @@ name: Trigger Auto-Logout (fallback)
 
 on:
   schedule:
-    - cron: '*/30 * * * *' # every 30 minutes
+    # Approximate 1.5-hour intervals (90 minutes) across the day — 16 runs/day
+    - cron: '0 0,1,3,4,6,7,9,10,12,13,15,16,18,19,21,22 * * *'
   workflow_dispatch: {}
 
 jobs:
