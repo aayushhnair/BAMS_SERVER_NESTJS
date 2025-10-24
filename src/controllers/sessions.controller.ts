@@ -99,6 +99,8 @@ export class SessionsController {
     @Query('skip') skip?: string,
     @Query('limit') limit?: string,
     @Query('showAll') showAll?: string, // For admin/debugging purposes
+    @Query('suspect') suspect?: string,
+    @Query('status') status?: string,
   ) {
     try {
       const filter: any = {};
@@ -109,23 +111,48 @@ export class SessionsController {
       // By default, only show active and recent sessions (last 30 days)
       // unless date range is explicitly provided or showAll=true
       const isShowAll = showAll === 'true';
-      
+
+      // Support suspect flag or a status query parameter. Allow comma-separated statuses and case-insensitive values.
+      if (suspect === 'true') {
+        filter.status = 'suspect';
+      }
+
+      if (status) {
+        const raw = String(status || '');
+        const parts = raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+        const normalize = (s: string) => {
+          if (s === 'active') return 'active';
+          if (s === 'loggedout' || s === 'logged_out' || s === 'logged-out') return 'logged_out';
+          if (s === 'auto_logged_out' || s === 'autologout' || s === 'auto-logged-out') return 'auto_logged_out';
+          if (s === 'expired') return 'expired';
+          if (s === 'heartbeat_timeout' || s === 'heartbeat-timeout') return 'heartbeat_timeout';
+          if (s === 'suspect') return 'suspect';
+          return s; // pass-through unknown values
+        };
+        const normalized = parts.map(normalize);
+        if (normalized.length === 1) filter.status = normalized[0];
+        else filter.status = { $in: normalized };
+      }
+
       if (from || to) {
         filter.loginAt = {};
         if (from) filter.loginAt.$gte = new Date(from);
         if (to) filter.loginAt.$lte = new Date(to);
       } else if (!isShowAll) {
         // Default: show only active sessions or sessions from last 30 days
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        
-        filter.$or = [
-          { status: 'active' }, // All active sessions
-          { 
-            loginAt: { $gte: thirtyDaysAgo }, // Recent sessions (last 30 days)
-            status: { $in: ['logged_out', 'expired', 'heartbeat_timeout', 'auto_logged_out'] }
-          }
-        ];
+        // Only apply this default when the caller did not explicitly request a status filter
+        if (!filter.status) {
+          const thirtyDaysAgo = new Date();
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+          
+          filter.$or = [
+            { status: 'active' }, // All active sessions
+            { 
+              loginAt: { $gte: thirtyDaysAgo }, // Recent sessions (last 30 days)
+              status: { $in: ['logged_out', 'expired', 'heartbeat_timeout', 'auto_logged_out'] }
+            }
+          ];
+        }
       }
 
       // Pagination

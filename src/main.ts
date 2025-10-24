@@ -37,6 +37,34 @@ async function bootstrap() {
     });
   }
 
+  // Disable Express ETag for API responses to avoid conditional GET / 304 responses
+  // which can cause the client to display stale cached payloads for dynamic API routes.
+  try {
+    const expressApp = app.getHttpAdapter().getInstance();
+    if (expressApp && typeof expressApp.set === 'function') {
+      expressApp.set('etag', false);
+      console.log('⚙️  Express ETag disabled for API responses');
+    }
+  } catch (err) {
+    // Non-fatal: if we can't access the underlying adapter, continue without crashing
+    console.warn('Unable to disable ETag on underlying HTTP adapter:', err?.message || err);
+  }
+
+  // Add a lightweight middleware to prevent caching for API and internal routes.
+  // This ensures clients and intermediate caches do not return stale session lists.
+  app.use((req, res, next) => {
+    try {
+      if (typeof req.path === 'string' && (req.path.startsWith('/api') || req.path.startsWith('/internal'))) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
+    } catch (e) {
+      // ignore header errors
+    }
+    return next();
+  });
+
   await app.listen(port, host);
   console.log(`Application is running on: http://${host}:${port}`);
 }

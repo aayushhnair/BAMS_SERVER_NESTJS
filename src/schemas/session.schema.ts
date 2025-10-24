@@ -42,7 +42,7 @@ export class Session {
   @Prop()
   logoutAt?: Date;
 
-  @Prop({ required: true, enum: ['active', 'logged_out', 'auto_logged_out', 'expired', 'heartbeat_timeout'], default: 'active' })
+  @Prop({ required: true, enum: ['active', 'logged_out', 'auto_logged_out', 'expired', 'heartbeat_timeout', 'suspect'], default: 'active' })
   status: string;
 
   @Prop({ default: () => new Date() })
@@ -51,6 +51,10 @@ export class Session {
   @Prop({ required: false })
   // workedSeconds stores number of seconds counted as "worked" for this session record.
   workedSeconds?: number;
+
+  @Prop({ default: 0 })
+  // consecutivePoorHeartbeats increments when heartbeat GPS accuracy is too poor to validate location.
+  consecutivePoorHeartbeats?: number;
 }
 
 export const SessionSchema = SchemaFactory.createForClass(Session);

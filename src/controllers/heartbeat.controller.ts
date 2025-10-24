@@ -152,13 +152,56 @@ export class HeartbeatController {
         if (doLocationValidation) {
           const hbLoc = { lat: heartbeatDto.location.lat, lon: heartbeatDto.location.lon, accuracy: heartbeatDto.location.accuracy };
           const proximityMeters = this.configService.get<number>('locationProximityMeters') || 100;
-          const maxAccuracy = this.configService.get<number>('heartbeatLocationMaxAccuracyMeters') || (proximityMeters * 5); // default tolerance
+          // Use the same proximityMeters as the heartbeat accuracy threshold per request
+          const maxAccuracy = proximityMeters;
 
-          // Reject if accuracy is too poor
+          // If accuracy is poor, increment consecutivePoorHeartbeats and skip location validation for this heartbeat.
           if (hbLoc.accuracy && hbLoc.accuracy > maxAccuracy) {
-            this.logger.warn(`Heartbeat location accuracy too poor for session ${heartbeatDto.sessionId}`, { sessionId: heartbeatDto.sessionId, accuracy: hbLoc.accuracy, maxAccuracy });
-            const msg = MESSAGES.LOCATION.LOCATION_NOT_ALLOWED;
-            throw new HttpException({ message: msg.message, error: 'POOR_LOCATION_ACCURACY', login_status: false }, HttpStatus.FORBIDDEN);
+            const updated = await this.sessionModel.findByIdAndUpdate(
+              session._id,
+              { $inc: { consecutivePoorHeartbeats: 1 } },
+              { new: true }
+            );
+            const counter = (updated && (updated as any).consecutivePoorHeartbeats) || 0;
+            this.logger.warn(`Heartbeat location accuracy too poor for session ${heartbeatDto.sessionId}`, { sessionId: heartbeatDto.sessionId, accuracy: hbLoc.accuracy, maxAccuracy, consecutivePoorHeartbeats: counter });
+
+            // If threshold exceeded, mark session as suspect for admin review (do not auto-logout immediately)
+            const POOR_THRESHOLD = 6; // configurable choice per request
+            if (counter >= POOR_THRESHOLD) {
+              await this.sessionModel.updateOne({ _id: session._id }, { status: 'suspect' });
+              // update lastHeartbeat and device lastSeen so admin has recent info
+              await this.sessionModel.updateOne({ _id: session._id }, { lastHeartbeat: currentTime });
+              await this.deviceModel.updateOne({ deviceId: heartbeatDto.deviceId }, { lastSeen: currentTime });
+              return {
+                ok: true,
+                login_status: true,
+                message: 'Heartbeat received but GPS accuracy poor; session marked suspect after multiple poor readings',
+                suspect: true,
+                consecutivePoorHeartbeats: counter,
+                sessionId: session._id,
+                lastHeartbeat: currentTime.toISOString()
+              };
+            }
+
+            // Otherwise, accept heartbeat but skip location checks for this heartbeat
+            await this.sessionModel.updateOne({ _id: session._id }, { lastHeartbeat: currentTime });
+            await this.deviceModel.updateOne({ deviceId: heartbeatDto.deviceId }, { lastSeen: currentTime });
+            return {
+              ok: true,
+              login_status: true,
+              message: 'Heartbeat accepted; GPS accuracy poor so location validation skipped for this heartbeat',
+              consecutivePoorHeartbeats: counter,
+              sessionId: session._id,
+              lastHeartbeat: currentTime.toISOString()
+            };
+          }
+
+          // Good accuracy: reset consecutive poor counter and, if previously marked suspect, restore active status
+          const resetUpdate: any = { consecutivePoorHeartbeats: 0 };
+          if ((session as any).status === 'suspect') resetUpdate.status = 'active';
+          if (Object.keys(resetUpdate).length > 0) {
+            await this.sessionModel.updateOne({ _id: session._id }, { $set: resetUpdate });
+            if (resetUpdate.status) this.logger.log(`Session ${session._id} restored to active after receiving good GPS accuracy`);
           }
 
           if (user.allocatedLocationId) {
